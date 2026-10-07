@@ -1,0 +1,212 @@
+# Local news sources.
+#
+# Same schema as international_sources.yaml. These sources are not part of the
+# 30 international feeds; they exist so that `country_sources` can map a visitor's
+# country to a predefined local publisher. The application never asks an LLM to
+# choose a local source — the mapping is data, defined here.
+
+version: 1
+sources:
+  - id: indiatoday
+    name: India Today
+    country: IN
+    type: rss
+    rss_url: https://www.indiatoday.in/rss/1206514
+    website_url: https://www.indiatoday.in/
+    enabled: true
+    priority: 85
+    language: en
+    poll_interval_seconds: 240
+    reliability_score: 80
+
+  - id: cbs-us
+    name: CBS News
+    country: US
+    type: rss
+    rss_url: https://www.cbsnews.com/latest/rss/us
+    website_url: https://www.cbsnews.com/us/
+    enabled: true
+    priority: 84
+    language: en
+    poll_interval_seconds: 240
+    reliability_score: 84
+
+  - id: globalnews-ca
+    name: Global News
+    country: CA
+    type: rss
+    rss_url: https://globalnews.ca/feed/
+    website_url: https://globalnews.ca/
+    enabled: true
+    priority: 78
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 80
+
+  - id: antaranews
+    name: Antara News
+    country: ID
+    type: rss
+    rss_url: https://en.antaranews.com/rss/news.xml
+    website_url: https://en.antaranews.com/
+    enabled: true
+    priority: 76
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 78
+
+  - id: ukrinform
+    name: Ukrinform
+    country: UA
+    type: rss
+    rss_url: https://www.ukrinform.net/rss/block-lastnews
+    website_url: https://www.ukrinform.net/
+    enabled: true
+    priority: 78
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 78
+
+  - id: capitalfm-ke
+    name: Capital News (Kenya)
+    country: KE
+    type: rss
+    rss_url: https://www.capitalfm.co.ke/news/feed/
+    website_url: https://www.capitalfm.co.ke/news/
+    enabled: true
+    priority: 70
+    language: en
+    poll_interval_seconds: 360
+    reliability_score: 72
+
+  - id: mexiconewsdaily
+    name: Mexico News Daily
+    country: MX
+    type: rss
+    rss_url: https://mexiconewsdaily.com/feed/
+    website_url: https://mexiconewsdaily.com/
+    enabled: true
+    priority: 70
+    language: en
+    poll_interval_seconds: 360
+    reliability_score: 74
+
+  - id: inquirer
+    name: Philippine Daily Inquirer
+    country: PH
+    type: rss
+    rss_url: https://newsinfo.inquirer.net/feed
+    website_url: https://newsinfo.inquirer.net/
+    enabled: true
+    priority: 76
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 78
+
+  - id: yna
+    name: Yonhap News Agency
+    country: KR
+    type: rss
+    rss_url: https://en.yna.co.kr/RSS/news.xml
+    website_url: https://en.yna.co.kr/
+    enabled: true
+    priority: 80
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 82
+
+  - id: nst
+    name: New Straits Times
+    country: MY
+    type: rss
+    rss_url: https://www.nst.com.my/feed
+    website_url: https://www.nst.com.my/
+    enabled: true
+    priority: 74
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 76
+
+  - id: nationthailand
+    name: The Nation (Thailand)
+    country: TH
+    type: rss
+    rss_url: https://www.nationthailand.com/rss
+    website_url: https://www.nationthailand.com/
+    enabled: true
+    priority: 72
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 76
+
+  - id: punchng
+    name: The Punch
+    country: NG
+    type: rss
+    rss_url: https://punchng.com/feed/
+    website_url: https://punchng.com/
+    enabled: true
+    priority: 72
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 74
+
+  - id: sabcnews
+    name: SABC News
+    country: ZA
+    type: rss
+    rss_url: https://www.sabcnews.com/sabcnews/feed/
+    website_url: https://www.sabcnews.com/
+    enabled: true
+    priority: 72
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 76
+
+  - id: irishtimes
+    name: The Irish Times
+    country: IE
+    type: rss
+    rss_url: https://www.irishtimes.com/cmlink/news-1.1319192
+    website_url: https://www.irishtimes.com/
+    enabled: true
+    priority: 76
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 82
+
+  - id: dutchnews
+    name: DutchNews.nl
+    country: NL
+    type: rss
+    rss_url: https://www.dutchnews.nl/feed/
+    website_url: https://www.dutchnews.nl/
+    enabled: true
+    priority: 70
+    language: en
+    poll_interval_seconds: 360
+    reliability_score: 74
+
+  - id: elpais-en
+    name: El País (English)
+    country: ES
+    type: rss
+    rss_url: https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada
+    website_url: https://english.elpais.com/
+    enabled: true
+    priority: 78
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 84
+
+  - id: folha-en
+    name: Folha de S.Paulo (English)
+    country: BR
+    type: rss
+    rss_url: https://feeds.folha.uol.com.br/internacional/en/rss091.xml
+    website_url: https://www1.folha.uol.com.br/internacional/en/
+    enabled: true
+    priority: 76
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 80

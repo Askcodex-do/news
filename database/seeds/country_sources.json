@@ -1,0 +1,226 @@
+[
+  {
+    "backup": null,
+    "country_code": "IN",
+    "enabled": true,
+    "primary": "indiatoday",
+    "priority": 90
+  },
+  {
+    "backup": null,
+    "country_code": "US",
+    "enabled": true,
+    "primary": "cbs-us",
+    "priority": 88
+  },
+  {
+    "backup": null,
+    "country_code": "GB",
+    "enabled": true,
+    "primary": "bbc-world",
+    "priority": 92
+  },
+  {
+    "backup": null,
+    "country_code": "PK",
+    "enabled": true,
+    "primary": "dawn",
+    "priority": 86
+  },
+  {
+    "backup": null,
+    "country_code": "JP",
+    "enabled": true,
+    "primary": "nhk-world",
+    "priority": 88
+  },
+  {
+    "backup": null,
+    "country_code": "CN",
+    "enabled": true,
+    "primary": "globaltimes",
+    "priority": 70
+  },
+  {
+    "backup": null,
+    "country_code": "RU",
+    "enabled": true,
+    "primary": "tass",
+    "priority": 70
+  },
+  {
+    "backup": null,
+    "country_code": "DE",
+    "enabled": true,
+    "primary": "dw-world",
+    "priority": 84
+  },
+  {
+    "backup": null,
+    "country_code": "FR",
+    "enabled": true,
+    "primary": "france24-en",
+    "priority": 84
+  },
+  {
+    "backup": null,
+    "country_code": "IT",
+    "enabled": true,
+    "primary": "ansa-en",
+    "priority": 80
+  },
+  {
+    "backup": null,
+    "country_code": "ES",
+    "enabled": true,
+    "primary": "elpais-en",
+    "priority": 80
+  },
+  {
+    "backup": null,
+    "country_code": "BR",
+    "enabled": true,
+    "primary": "folha-en",
+    "priority": 78
+  },
+  {
+    "backup": null,
+    "country_code": "CA",
+    "enabled": true,
+    "primary": "globalnews-ca",
+    "priority": 80
+  },
+  {
+    "backup": null,
+    "country_code": "AU",
+    "enabled": true,
+    "primary": "abc-au-world",
+    "priority": 80
+  },
+  {
+    "backup": null,
+    "country_code": "QA",
+    "enabled": true,
+    "primary": "aljazeera-all",
+    "priority": 76
+  },
+  {
+    "backup": null,
+    "country_code": "TR",
+    "enabled": true,
+    "primary": "anadolu-world",
+    "priority": 76
+  },
+  {
+    "backup": null,
+    "country_code": "IL",
+    "enabled": true,
+    "primary": "jpost",
+    "priority": 78
+  },
+  {
+    "backup": null,
+    "country_code": "SG",
+    "enabled": true,
+    "primary": "straitstimes",
+    "priority": 78
+  },
+  {
+    "backup": null,
+    "country_code": "HK",
+    "enabled": true,
+    "primary": "scmp",
+    "priority": 76
+  },
+  {
+    "backup": null,
+    "country_code": "KR",
+    "enabled": true,
+    "primary": "yna",
+    "priority": 80
+  },
+  {
+    "backup": null,
+    "country_code": "ID",
+    "enabled": true,
+    "primary": "antaranews",
+    "priority": 76
+  },
+  {
+    "backup": null,
+    "country_code": "MY",
+    "enabled": true,
+    "primary": "nst",
+    "priority": 74
+  },
+  {
+    "backup": null,
+    "country_code": "TH",
+    "enabled": true,
+    "primary": "nationthailand",
+    "priority": 74
+  },
+  {
+    "backup": null,
+    "country_code": "PH",
+    "enabled": true,
+    "primary": "inquirer",
+    "priority": 76
+  },
+  {
+    "backup": null,
+    "country_code": "UA",
+    "enabled": true,
+    "primary": "ukrinform",
+    "priority": 78
+  },
+  {
+    "backup": null,
+    "country_code": "IE",
+    "enabled": true,
+    "primary": "irishtimes",
+    "priority": 78
+  },
+  {
+    "backup": null,
+    "country_code": "NL",
+    "enabled": true,
+    "primary": "dutchnews",
+    "priority": 72
+  },
+  {
+    "backup": null,
+    "country_code": "MX",
+    "enabled": true,
+    "primary": "mexiconewsdaily",
+    "priority": 72
+  },
+  {
+    "backup": null,
+    "country_code": "NG",
+    "enabled": true,
+    "primary": "punchng",
+    "priority": 72
+  },
+  {
+    "backup": null,
+    "country_code": "ZA",
+    "enabled": true,
+    "primary": "sabcnews",
+    "priority": 74
+  },
+  {
+    "backup": null,
+    "country_code": "KE",
+    "enabled": true,
+    "primary": "capitalfm-ke",
+    "priority": 70
+  },
+  {
+    "backup": null,
+    "country_code": "AR",
+    "enabled": true,
+    "primary": "batimes",
+    "priority": 72
+  }
+]

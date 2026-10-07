@@ -1,0 +1,52 @@
+# Country -> local source mapping.
+#
+# This is the dedicated `country_sources` configuration (spec section 4). The
+# application must NEVER ask an LLM to "find a reputable Indian news website".
+# Instead it already knows: IN -> India Today. The AI only analyzes the
+# information produced by the predefined source.
+#
+# Field reference
+#   country_code  ISO 3166-1 alpha-2
+#   primary       source id that is the primary local source (required)
+#   backup        source id used if the primary is unavailable (optional; the
+#                 schema supports it from day one, only `primary` is required now)
+#   priority      0-100 ranking weight for the local feed
+#   enabled       whether this mapping is active
+#
+# A country with no mapping (or an unmapped visitor IP) falls back to the
+# global/default feed; the site must never be blocked.
+
+version: 1
+mappings:
+  - {country_code: IN, primary: indiatoday, priority: 90, enabled: true}
+  - {country_code: US, primary: cbs-us, priority: 88, enabled: true}
+  - {country_code: GB, primary: bbc-world, priority: 92, enabled: true}
+  - {country_code: PK, primary: dawn, priority: 86, enabled: true}
+  - {country_code: JP, primary: nhk-world, priority: 88, enabled: true}
+  - {country_code: CN, primary: globaltimes, priority: 70, enabled: true}
+  - {country_code: RU, primary: tass, priority: 70, enabled: true}
+  - {country_code: DE, primary: dw-world, priority: 84, enabled: true}
+  - {country_code: FR, primary: france24-en, priority: 84, enabled: true}
+  - {country_code: IT, primary: ansa-en, priority: 80, enabled: true}
+  - {country_code: ES, primary: elpais-en, priority: 80, enabled: true}
+  - {country_code: BR, primary: folha-en, priority: 78, enabled: true}
+  - {country_code: CA, primary: globalnews-ca, priority: 80, enabled: true}
+  - {country_code: AU, primary: abc-au-world, priority: 80, enabled: true}
+  - {country_code: QA, primary: aljazeera-all, priority: 76, enabled: true}
+  - {country_code: TR, primary: anadolu-world, priority: 76, enabled: true}
+  - {country_code: IL, primary: jpost, priority: 78, enabled: true}
+  - {country_code: SG, primary: straitstimes, priority: 78, enabled: true}
+  - {country_code: HK, primary: scmp, priority: 76, enabled: true}
+  - {country_code: KR, primary: yna, priority: 80, enabled: true}
+  - {country_code: ID, primary: antaranews, priority: 76, enabled: true}
+  - {country_code: MY, primary: nst, priority: 74, enabled: true}
+  - {country_code: TH, primary: nationthailand, priority: 74, enabled: true}
+  - {country_code: PH, primary: inquirer, priority: 76, enabled: true}
+  - {country_code: UA, primary: ukrinform, priority: 78, enabled: true}
+  - {country_code: IE, primary: irishtimes, priority: 78, enabled: true}
+  - {country_code: NL, primary: dutchnews, priority: 72, enabled: true}
+  - {country_code: MX, primary: mexiconewsdaily, priority: 72, enabled: true}
+  - {country_code: NG, primary: punchng, priority: 72, enabled: true}
+  - {country_code: ZA, primary: sabcnews, priority: 74, enabled: true}
+  - {country_code: KE, primary: capitalfm-ke, priority: 70, enabled: true}
+  - {country_code: AR, primary: batimes, priority: 72, enabled: true}

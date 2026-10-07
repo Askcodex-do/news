@@ -1,0 +1,385 @@
+# International news sources — exactly 30 initially.
+#
+# This file is the single source of truth for source configuration. Source URLs
+# must never be hard-coded in application code; load them from here (or from the
+# `sources` table seeded from here) at runtime.
+#
+# Field reference
+#   id                    stable slug, used as the natural key across the system
+#   name                  human-readable publisher name
+#   country               ISO 3166-1 alpha-2 country of the publisher
+#   type                  rss | atom | api
+#   rss_url               feed URL (required for rss/atom)
+#   website_url           publisher home page (required)
+#   api_url               optional structured API endpoint
+#   enabled               whether the ingestion worker should poll it
+#   priority              0-100; higher = polled more eagerly / ranked higher
+#   language              BCP-47-ish language tag of the feed
+#   poll_interval_seconds how often the ingestion worker polls the feed
+#   reliability_score     0-100 editorial prior; adjusted over time by source_health
+#
+# NOTE: reliability_score values below are reasonable editorial priors for a
+# fresh deployment, not measured values. They are tuned over time in
+# `source_reliability` based on observed accuracy.
+
+version: 1
+sources:
+  - id: bbc-world
+    name: BBC News
+    country: GB
+    type: rss
+    rss_url: https://feeds.bbci.co.uk/news/world/rss.xml
+    website_url: https://www.bbc.com/news/world
+    enabled: true
+    priority: 95
+    language: en
+    poll_interval_seconds: 180
+    reliability_score: 92
+
+  - id: reuters-world
+    name: Reuters
+    country: US
+    type: rss
+    rss_url: https://www.reutersagency.com/feed/?best-topics=world&post_type=best
+    website_url: https://www.reuters.com/world/
+    enabled: true
+    priority: 98
+    language: en
+    poll_interval_seconds: 180
+    reliability_score: 96
+
+  - id: ap-topnews
+    name: Associated Press
+    country: US
+    type: rss
+    rss_url: https://rsshub.app/apnews/topics/apf-topnews
+    website_url: https://apnews.com/hub/world-news
+    enabled: true
+    priority: 96
+    language: en
+    poll_interval_seconds: 180
+    reliability_score: 95
+
+  - id: aljazeera-all
+    name: Al Jazeera
+    country: QA
+    type: rss
+    rss_url: https://www.aljazeera.com/xml/rss/all.xml
+    website_url: https://www.aljazeera.com/
+    enabled: true
+    priority: 88
+    language: en
+    poll_interval_seconds: 240
+    reliability_score: 84
+
+  - id: guardian-world
+    name: The Guardian
+    country: GB
+    type: rss
+    rss_url: https://www.theguardian.com/world/rss
+    website_url: https://www.theguardian.com/world
+    enabled: true
+    priority: 88
+    language: en
+    poll_interval_seconds: 240
+    reliability_score: 86
+
+  - id: nyt-world
+    name: The New York Times
+    country: US
+    type: rss
+    rss_url: https://rss.nytimes.com/services/xml/rss/nyt/World.xml
+    website_url: https://www.nytimes.com/section/world
+    enabled: true
+    priority: 90
+    language: en
+    poll_interval_seconds: 240
+    reliability_score: 90
+
+  - id: wapo-world
+    name: The Washington Post
+    country: US
+    type: rss
+    rss_url: https://feeds.washingtonpost.com/rss/world
+    website_url: https://www.washingtonpost.com/world/
+    enabled: true
+    priority: 87
+    language: en
+    poll_interval_seconds: 240
+    reliability_score: 87
+
+  - id: npr-world
+    name: NPR
+    country: US
+    type: rss
+    rss_url: https://feeds.npr.org/1004/rss.xml
+    website_url: https://www.npr.org/sections/world/
+    enabled: true
+    priority: 84
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 88
+
+  - id: cnn-world
+    name: CNN International
+    country: US
+    type: rss
+    rss_url: http://rss.cnn.com/rss/edition_world.rss
+    website_url: https://edition.cnn.com/world
+    enabled: true
+    priority: 85
+    language: en
+    poll_interval_seconds: 240
+    reliability_score: 82
+
+  - id: abc-au-world
+    name: ABC News (Australia)
+    country: AU
+    type: rss
+    rss_url: https://www.abc.net.au/news/feed/2942460/rss.xml
+    website_url: https://www.abc.net.au/news/world
+    enabled: true
+    priority: 82
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 86
+
+  - id: dw-world
+    name: Deutsche Welle
+    country: DE
+    type: rss
+    rss_url: https://rss.dw.com/rdf/rss-en-world
+    website_url: https://www.dw.com/en/
+    enabled: true
+    priority: 84
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 87
+
+  - id: france24-en
+    name: France 24
+    country: FR
+    type: rss
+    rss_url: https://www.france24.com/en/rss
+    website_url: https://www.france24.com/en/
+    enabled: true
+    priority: 82
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 84
+
+  - id: lemonde-en
+    name: Le Monde (English)
+    country: FR
+    type: rss
+    rss_url: https://www.lemonde.fr/en/rss/une.xml
+    website_url: https://www.lemonde.fr/en/
+    enabled: true
+    priority: 80
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 88
+
+  - id: euronews
+    name: Euronews
+    country: FR
+    type: rss
+    rss_url: https://www.euronews.com/rss?level=theme&name=news
+    website_url: https://www.euronews.com/
+    enabled: true
+    priority: 78
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 80
+
+  - id: nhk-world
+    name: NHK World-Japan
+    country: JP
+    type: rss
+    rss_url: https://www3.nhk.or.jp/rss/news/cat6.xml
+    website_url: https://www3.nhk.or.jp/nhkworld/en/news/
+    enabled: true
+    priority: 88
+    language: ja
+    poll_interval_seconds: 240
+    reliability_score: 91
+
+  - id: japantimes
+    name: The Japan Times
+    country: JP
+    type: rss
+    rss_url: https://www.japantimes.co.jp/feed/
+    website_url: https://www.japantimes.co.jp/
+    enabled: true
+    priority: 80
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 85
+
+  - id: scmp
+    name: South China Morning Post
+    country: HK
+    type: rss
+    rss_url: https://www.scmp.com/rss/91/feed
+    website_url: https://www.scmp.com/
+    enabled: true
+    priority: 80
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 80
+
+  - id: straitstimes
+    name: The Straits Times
+    country: SG
+    type: rss
+    rss_url: https://www.straitstimes.com/news/world/rss.xml
+    website_url: https://www.straitstimes.com/
+    enabled: true
+    priority: 78
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 82
+
+  - id: timesofindia-world
+    name: The Times of India
+    country: IN
+    type: rss
+    rss_url: https://timesofindia.indiatimes.com/rssfeeds/296589292.cms
+    website_url: https://timesofindia.indiatimes.com/
+    enabled: true
+    priority: 80
+    language: en
+    poll_interval_seconds: 240
+    reliability_score: 78
+
+  - id: thehindu-intl
+    name: The Hindu
+    country: IN
+    type: rss
+    rss_url: https://www.thehindu.com/news/international/feeder/default.rss
+    website_url: https://www.thehindu.com/news/international/
+    enabled: true
+    priority: 80
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 84
+
+  - id: hindustantimes-world
+    name: Hindustan Times
+    country: IN
+    type: rss
+    rss_url: https://www.hindustantimes.com/feeds/rss/world-news/rssfeed.xml
+    website_url: https://www.hindustantimes.com/world-news
+    enabled: true
+    priority: 76
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 76
+
+  - id: dawn
+    name: Dawn
+    country: PK
+    type: rss
+    rss_url: https://www.dawn.com/feeds/home
+    website_url: https://www.dawn.com/
+    enabled: true
+    priority: 80
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 82
+
+  - id: tribune-pk
+    name: The Express Tribune
+    country: PK
+    type: rss
+    rss_url: https://tribune.com.pk/feed/home
+    website_url: https://tribune.com.pk/
+    enabled: true
+    priority: 74
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 74
+
+  - id: tass
+    name: TASS
+    country: RU
+    type: rss
+    rss_url: https://tass.com/rss/v2.xml
+    website_url: https://tass.com/
+    enabled: true
+    priority: 74
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 68
+
+  - id: moscowtimes
+    name: The Moscow Times
+    country: RU
+    type: rss
+    rss_url: https://www.themoscowtimes.com/rss/news
+    website_url: https://www.themoscowtimes.com/
+    enabled: true
+    priority: 72
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 78
+
+  - id: globaltimes
+    name: Global Times
+    country: CN
+    type: rss
+    rss_url: https://www.globaltimes.cn/rss/outbrain.xml
+    website_url: https://www.globaltimes.cn/
+    enabled: true
+    priority: 68
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 60
+
+  - id: jpost
+    name: The Jerusalem Post
+    country: IL
+    type: rss
+    rss_url: https://www.jpost.com/rss/rssfeedsfrontpage.aspx
+    website_url: https://www.jpost.com/
+    enabled: true
+    priority: 76
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 76
+
+  - id: anadolu-world
+    name: Anadolu Agency
+    country: TR
+    type: rss
+    rss_url: https://www.aa.com.tr/en/rss/default?cat=world
+    website_url: https://www.aa.com.tr/en
+    enabled: true
+    priority: 74
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 76
+
+  - id: ansa-en
+    name: ANSA
+    country: IT
+    type: rss
+    rss_url: https://www.ansa.it/english/english_rss.xml
+    website_url: https://www.ansa.it/english/
+    enabled: true
+    priority: 74
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 82
+
+  - id: batimes
+    name: Buenos Aires Times
+    country: AR
+    type: rss
+    rss_url: https://www.batimes.com.ar/feed
+    website_url: https://www.batimes.com.ar/
+    enabled: true
+    priority: 68
+    language: en
+    poll_interval_seconds: 300
+    reliability_score: 74

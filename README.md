@@ -17,12 +17,12 @@ This repository is being built in phases (see the task specification).
 | Phase | Scope | State |
 | --- | --- | --- |
 | 1 | Foundation: repo, Docker, PostgreSQL, FastAPI, Next.js, migrations, config, tests | **implemented** |
-| 2 | News ingestion: source management, RSS/API ingestion, normalization, URL dedup, hashing, source health | planned |
+| 2 | News ingestion: source management, RSS/API ingestion, normalization, URL dedup, hashing, source health | **implemented** |
 | 3 | Event intelligence: semantic dedup, clustering, fact extraction, source independence, confidence | planned |
 | 4 | AI editorial system: importance, generation, fact validation, attribution, versions | planned |
 | 5 | Localization: IP → country, country → configured source, local/global ranking, 20 + 20 feeds | partial (geo + feed scaffold) |
 | 6 | Images: generation with transient handling, no permanent storage | planned |
-| 7 | Continuous operation: queues, retries, scheduling, monitoring, 24/7 workers | scaffold only |
+| 7 | Continuous operation: queues, retries, scheduling, monitoring, 24/7 workers | partial (queue + worker loop) |
 | 8 | Production hardening: security, load/accuracy/duplicate testing, DR, backups, cost controls | planned |
 
 What Phase 1 delivers today:
@@ -38,6 +38,26 @@ What Phase 1 delivers today:
 - Docker Compose for local and single-VM deployment, including a
   least-privilege database role.
 - Unit tests plus integration tests that exercise real database code paths.
+
+What Phase 2 adds:
+
+- An asynchronous ingestion pipeline (`app/services/ingestion.py`):
+  fetch → parse (RSS/Atom) → normalize → validate → deduplicate → store, per
+  source, with per-entry rejection instead of a whole-feed failure.
+- Three-level duplicate detection: canonical URL (Level 1), SHA-256 of
+  normalized content (Level 2), and a near-duplicate hash (SimHash) stored for
+  Level 3 clustering in Phase 3.
+- A PostgreSQL-backed job queue (`app/services/queue.py`) with idempotency
+  keys, `FOR UPDATE SKIP LOCKED` claiming, exponential backoff, dead-lettering
+  and stale-lock recovery. No duplicate jobs, even across worker crashes.
+- A scheduler (`app/services/scheduler.py`) that enqueues poll jobs for due
+  sources, with per-source backoff when a source is failing.
+- Source health tracking (`app/services/source_health.py`): success/failure
+  counts, rolling latency and `unknown → healthy → degraded → down` status.
+- A continuous worker loop (`app/services/worker_loop.py`) that runs the whole
+  thing 24/7 and survives any single failure.
+- Admin/ops endpoints under `/admin` (token-protected) for source health, queue
+  depth, ingestion counters, manual polling and scheduler control.
 
 ## Quick start (Docker Compose)
 
@@ -80,12 +100,31 @@ npm run dev
 ```bash
 cd backend
 . .venv/bin/activate
-pytest            # unit tests always run; integration tests need PostgreSQL
+
+# Database-backed tests use an isolated `news_test` database (never the live
+# one). Create and migrate it once:
+psql -c "CREATE DATABASE news_test OWNER news_app"
+DATABASE_URL=postgresql+asyncpg://news_app:change-me@localhost:5432/news_test \
+  alembic upgrade head
+pytest
 ruff check app tests
 ```
 
-Integration tests skip automatically when no database is reachable, so the
-unit suite is safe to run anywhere.
+Integration and ingestion tests skip automatically when the test database is
+missing or unmigrated, so the unit suite is safe to run anywhere.
+
+### Running the ingestion worker
+
+```bash
+cd backend
+. .venv/bin/activate
+
+python -m app.cli worker              # continuous 24/7 loop
+python -m app.cli ingest-once         # one scheduling + execution pass
+python -m app.cli poll-source bbc-world   # poll a single source now
+```
+
+Under Docker Compose the `worker` service runs `python -m app.cli worker`.
 
 ## Configuration
 
@@ -112,9 +151,10 @@ backend/            FastAPI app, domain models, services, API routes, tests
   app/db/           engine, session, metadata base
   app/models/       SQLAlchemy models (16 tables)
   app/schemas/      Pydantic request/response models
-  app/services/     config loading, feed parsing, text normalization, geoip, seeding
+  app/services/     config loading, feed parsing, text normalization, ingestion,
+                    queue, scheduler, source health, geoip, seeding
 frontend/           Next.js App Router UI
-workers/            background workers (Phase 7)
+workers/            worker layout notes (the Phase 2 loop lives in app/services)
 config/             source + country configuration (source of truth)
 database/           migrations and generated seeds
 infrastructure/     Dockerfiles, postgres init, deployment notes
@@ -141,4 +181,8 @@ safeguards that make this different from "scrape → rewrite → publish".
 - Visitor IPs are used only to resolve a country and are not stored.
 - The application connects to PostgreSQL as a least-privilege role, not the
   superuser.
-- Fetched content will be sanitized and external URLs validated in Phase 2.
+- Ingestion only fetches configured `http(s)` URLs, strips HTML from feed
+  content, and rejects non-`http(s)` links; `raw_text_permitted` gates whether
+  publisher full text is stored at all.
+- Admin/ops endpoints are token-protected and rate limiting is planned for
+  Phase 8.

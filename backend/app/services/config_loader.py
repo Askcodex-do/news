@@ -35,6 +35,9 @@ class SourceConfig(BaseModel):
     language: str = "en"
     poll_interval_seconds: int = Field(ge=30, default=300)
     reliability_score: float = Field(ge=0, le=100, default=70.0)
+    # Whether the source's terms permit storing the full article body. Default
+    # false: we keep title/summary and a link, not the publisher's full text.
+    raw_text_permitted: bool = False
 
     @field_validator("country")
     @classmethod

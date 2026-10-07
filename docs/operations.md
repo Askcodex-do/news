@@ -8,10 +8,10 @@ single-VM deployment; later phases add scheduling, monitoring and backups.
 | Service | Purpose | Port |
 | --- | --- | --- |
 | `postgres` | PostgreSQL 16 + pgvector; provisions the least-privilege `news_app` role | 5432 |
-| `redis` | Queue broker / cache (used from Phase 7) | 6379 |
+| `redis` | Queue broker / cache (reserved; the Phase 2 queue is PostgreSQL-backed) | 6379 |
 | `migrate` | Runs `alembic upgrade head` then `python -m app.cli seed`, then exits | — |
 | `backend` | FastAPI API (uvicorn) | 8000 |
-| `worker` | Background workers (placeholder until Phase 7) | — |
+| `worker` | Ingestion worker: continuous scheduling + execution loop | — |
 | `frontend` | Next.js UI | 12000 |
 
 ## Bring up / tear down
@@ -79,15 +79,46 @@ can restart it automatically.
 Admin/ops endpoints require the shared token:
 
 ```bash
-curl -H "X-Admin-Token: $ADMIN_API_TOKEN" localhost:8000/sources/bbc-world/health
+H="X-Admin-Token: $ADMIN_API_TOKEN"
+curl -H "$H" localhost:8000/sources/bbc-world/health
+curl -H "$H" localhost:8000/admin/sources/health          # all sources, worst first
+curl -H "$H" localhost:8000/admin/ingestion/stats         # throughput + queue depth
+curl -H "$H" localhost:8000/admin/jobs?limit=20           # recent jobs
+curl -X POST -H "$H" localhost:8000/admin/sources/bbc-world/poll
+curl -X POST -H "$H" localhost:8000/admin/schedule/run
 ```
 
 Requests without a valid token get `401`.
 
-## Failure handling expectations (Phase 2+)
+## Ingestion worker (Phase 2)
+
+The `worker` service runs `python -m app.cli worker`. Each tick:
+
+1. returns jobs abandoned by dead workers to `PENDING`,
+2. executes runnable jobs (each with its own session so one failure cannot roll
+   back another),
+3. periodically enqueues poll jobs for sources that are due.
+
+Operate it manually:
+
+```bash
+cd backend && . .venv/bin/activate
+python -m app.cli worker                  # continuous
+python -m app.cli ingest-once             # one pass
+python -m app.cli poll-source bbc-world   # one source now
+```
+
+The queue is PostgreSQL-backed and retryable. Jobs are idempotent by key, so
+restarting the worker never produces duplicate work. A source that keeps failing
+backs off (up to 8× its interval) and eventually shows as `down` in
+`/admin/sources/health` — without stopping any other source.
+
+## Failure handling (Phase 2+)
 
 - A failing source is recorded (`source_health`) and retried with backoff; it
   must not affect other sources.
+- A malformed feed entry is rejected individually; the rest of the feed is
+  still ingested.
 - AI API failures queue and retry; image failures publish the article without
   an image.
 - Every job carries an idempotency key so retries never duplicate output.

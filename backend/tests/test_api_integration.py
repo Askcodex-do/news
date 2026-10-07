@@ -1,34 +1,25 @@
 """Integration tests against a real PostgreSQL database.
 
 These exercise the actual SQLAlchemy models, migrations and API handlers rather
-than mocks. They require a reachable database (see docker-compose.yml) and are
-skipped automatically when one is not available.
+than mocks. They run against the isolated test database configured in
+conftest.py and skip automatically when it is missing or unmigrated.
 """
 
 from __future__ import annotations
 
 import httpx
 import pytest
-from sqlalchemy import text
 
-from app.db.session import SessionLocal, engine
+from app.db.session import SessionLocal
 from app.main import app
 from app.services.seeding import seed
-
-
-async def _database_available() -> bool:
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        return True
-    except Exception:
-        return False
+from tests.conftest import database_available
 
 
 @pytest.fixture(scope="session")
 async def client():
-    if not await _database_available():
-        pytest.skip("no PostgreSQL database available")
+    if not await database_available():
+        pytest.skip("test database not available (see conftest for setup)")
 
     async with SessionLocal() as session:
         await seed(session)

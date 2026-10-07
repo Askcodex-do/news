@@ -19,6 +19,7 @@ COPY backend/app ./backend/app
 COPY backend/alembic.ini ./backend/alembic.ini
 COPY database ./database
 COPY config ./config
+COPY workers ./workers
 
 RUN pip install --upgrade pip && pip install ./backend
 

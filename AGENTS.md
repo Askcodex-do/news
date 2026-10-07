@@ -12,25 +12,30 @@ Non-negotiable product rule: **accuracy outranks speed, volume, SEO and
 engagement.** "Not enough verified information to publish" is a valid outcome
 and must be implemented as a product behavior, not just an AI prompt.
 
-The spec is delivered in phases. Phase 1 (foundation) is complete; see
-`README.md` for the phase table.
+The spec is delivered in phases. Phases 1 (foundation) and 2 (news ingestion)
+are complete; see `README.md` for the phase table.
 
 ## Commands
 
 ```bash
 # Backend
 cd backend && . .venv/bin/activate
-pytest                       # 34 tests; integration tests need Postgres
+pytest                       # 62 tests; DB tests use isolated news_test
 ruff check app tests
 ruff format app tests
 alembic upgrade head         # run from backend/
 python -m app.cli seed       # config/*.yaml -> database (idempotent)
 python -m app.cli export-seeds
 
+# Ingestion (Phase 2)
+python -m app.cli worker             # continuous 24/7 loop
+python -m app.cli ingest-once        # one scheduling + execution pass
+python -m app.cli poll-source bbc-world
+
 # Full stack
 docker compose up -d --build
 docker compose ps
-docker compose logs -f backend
+docker compose logs -f backend worker
 ```
 
 ## Layout notes
@@ -59,10 +64,34 @@ docker compose logs -f backend
 - If the init script's mode is not world-readable the container cannot run it;
   keep it `755`.
 
+## Ingestion (Phase 2)
+
+- Pipeline: `app/services/ingestion.py` — fetch → parse → normalize → validate →
+  deduplicate → store. One bad entry is rejected, not the whole feed.
+- Dedup levels: Level 1 canonical URL, Level 2 SHA-256 of normalized content,
+  Level 3 SimHash (stored now, clustered in Phase 3).
+- Queue: `app/services/queue.py`. Idempotency keys + `ON CONFLICT` guarantee no
+  duplicate jobs; `FOR UPDATE SKIP LOCKED` makes claiming worker-safe; failures
+  back off exponentially and dead-letter after `max_attempts`.
+- Scheduler: `app/services/scheduler.py`. Poll keys are bucketed by
+  `poll_interval_seconds`, so a re-run inside the same window enqueues nothing.
+- Worker loop: `app/services/worker_loop.py`. One tick = recover stale locks →
+  run runnable jobs → periodically enqueue due sources. It must never exit on a
+  single failure.
+- Health: `app/services/source_health.py`. `unknown → healthy → degraded → down`;
+  a success clears the failure streak.
+- Admin API: `/admin/*` (token-protected) — source health, queue depth, stats,
+  manual poll, scheduler run.
+
 ## Testing conventions
 
-- Real code paths only; avoid mocks. Integration tests hit a real Postgres and
-  skip when none is reachable.
+- Real code paths only; avoid mocks. Integration and ingestion tests hit a real
+  Postgres and skip when none is reachable.
+- Tests NEVER use the live database. `tests/conftest.py` repoints `DATABASE_URL`
+  to `news_test` *before* importing app modules (the engine is built at import
+  time). Create/migrate `news_test` once to enable DB tests.
+- The job queue is global, so queue tests use the `clean_queue` fixture to avoid
+  executing jobs another test (or a failed run) left behind.
 - `pyproject.toml` sets `asyncio_default_fixture_loop_scope` and
   `asyncio_default_test_loop_scope` to `session`. Keep them in sync: the shared
   engine is created at import time, so mixing module-scoped async fixtures with

@@ -76,6 +76,7 @@ async def _upsert_source(
         "poll_interval_seconds": config.poll_interval_seconds,
         "reliability_score": config.reliability_score,
         "is_international": is_international,
+        "raw_text_permitted": config.raw_text_permitted,
     }
     if source is None:
         source = Source(slug=config.id, **values)

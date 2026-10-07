@@ -15,7 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDMixin
 from app.models.enums import SourceType
@@ -47,6 +47,13 @@ class Source(Base, UUIDMixin, TimestampMixin):
     lineage_root_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("sources.id"), index=True
     )
+    # Whether the source's terms permit storing the full article body. We store
+    # title/summary and a link regardless; full text only when permitted.
+    raw_text_permitted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    health: Mapped[SourceHealth | None] = relationship(
+        back_populates="source", uselist=False, lazy="selectin"
+    )
 
 
 class SourceHealth(Base, UUIDMixin, TimestampMixin):
@@ -64,6 +71,8 @@ class SourceHealth(Base, UUIDMixin, TimestampMixin):
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     avg_latency_ms: Mapped[float | None] = mapped_column(Float)
     last_error: Mapped[str | None] = mapped_column(Text)
+
+    source: Mapped[Source] = relationship(back_populates="health")
 
 
 class SourceReliability(Base, UUIDMixin, TimestampMixin):

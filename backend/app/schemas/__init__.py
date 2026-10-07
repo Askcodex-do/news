@@ -7,7 +7,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models.enums import EventStatus, SourceType
+from app.models.enums import EventStatus, JobStatus, SourceType
 
 
 class SourceOut(BaseModel):
@@ -111,3 +111,53 @@ class EventOut(BaseModel):
     importance_score: float
     first_detected_at: datetime
     last_updated_at: datetime
+
+
+class JobOut(BaseModel):
+    """A background job, exposed for operational visibility (spec section 33)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    job_type: str
+    idempotency_key: str
+    status: JobStatus
+    attempts: int
+    max_attempts: int
+    run_after: datetime | None
+    locked_at: datetime | None
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SourceHealthRow(BaseModel):
+    """Flattened source + health view for the ops dashboard."""
+
+    source_slug: str
+    source_name: str
+    enabled: bool
+    is_international: bool
+    status: str
+    consecutive_failures: int
+    success_count: int
+    failure_count: int
+    avg_latency_ms: float | None
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+    last_error: str | None
+
+
+class IngestionStatsOut(BaseModel):
+    """Aggregate ingestion counters (spec section 33)."""
+
+    reports_total: int
+    reports_last_hour: int
+    reports_last_24h: int
+    duplicates_total: int
+    sources_healthy: int
+    sources_degraded: int
+    sources_down: int
+    sources_unknown: int
+    queue: dict[str, int]
+    generated_at: datetime

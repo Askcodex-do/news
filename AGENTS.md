@@ -21,7 +21,7 @@ The spec is delivered in phases. Phases 1 (foundation), 2 (news ingestion) and
 ```bash
 # Backend
 cd backend && . .venv/bin/activate
-pytest                       # 101 tests; DB tests use isolated news_test
+pytest                       # 104 tests; DB tests use isolated news_test
 ruff check app tests
 ruff format app tests
 alembic upgrade head         # run from backend/

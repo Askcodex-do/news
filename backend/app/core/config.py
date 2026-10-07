@@ -52,6 +52,37 @@ class Settings(BaseSettings):
     image_provider: str = ""
     image_api_key: str = Field(default="", repr=False)
 
+    # Embeddings (Phase 3 clustering). The default hashing provider runs fully
+    # offline and deterministically; set provider=openai to use a real model.
+    embedding_provider: str = "hashing"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_api_key: str = Field(default="", repr=False)
+    embedding_dim: int = 1536
+    # Embed at most this many reports per clustering pass (cost control).
+    embedding_max_per_pass: int = 200
+
+    # Clustering / event identity (spec sections 8-9)
+    # Combined similarity above which two reports are treated as the same event.
+    # Below the semantic weight so a strong headline match clears it alone.
+    cluster_similarity_threshold: float = 0.70
+    # Multiplier applied when two known event types disagree. A penalty rather
+    # than a veto, because keyword type labels are imperfect. Kept high enough
+    # that an identical headline still clears the threshold across labels.
+    cluster_type_mismatch_penalty: float = 0.90
+    # Cosine similarity above which two reports are considered near-duplicates
+    # for the purpose of collapsing them into one independent source.
+    near_duplicate_threshold: float = 0.92
+    # A new report may join an existing event only if its publish time is within
+    # this window of the event's activity (events are time-bounded).
+    event_time_window_hours: int = 72
+
+    # Verification / confidence (spec sections 10-13)
+    min_confidence_to_publish: float = 70.0
+    # Independent-source counts mapped onto the confidence scale.
+    confidence_independent_target: int = 5
+    # Relative tolerance before two numeric claims count as a conflict.
+    conflict_relative_tolerance: float = 0.05
+
     # Cost controls
     ai_max_requests_per_hour: int = 500
     ai_max_tokens_per_article: int = 4000

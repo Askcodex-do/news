@@ -161,3 +161,61 @@ class IngestionStatsOut(BaseModel):
     sources_unknown: int
     queue: dict[str, int]
     generated_at: datetime
+
+
+class EventFactOut(BaseModel):
+    """A verified fact with its source support (spec section 10)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    fact_type: str
+    fact_key: str | None
+    statement: str
+    value_numeric: float | None
+    value_text: str | None
+    source_count: int
+    independent_source_count: int
+    first_seen_at: datetime
+    last_confirmed_at: datetime | None
+    superseded_by_id: uuid.UUID | None
+
+
+class EventConflictOut(BaseModel):
+    """A source disagreement (spec section 24)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    fact_type: str
+    claim: str
+    status: str
+    resolution: str | None
+    detected_at: datetime
+    resolved_at: datetime | None
+
+
+class EventDetailOut(EventOut):
+    """An event plus the evidence the AI writer is allowed to use."""
+
+    report_count: int
+    independent_source_count: int
+    conflict_count: int
+    facts: list[EventFactOut]
+    conflicts: list[EventConflictOut]
+
+
+class EventIntelligenceStatsOut(BaseModel):
+    """Accuracy dashboard for Phase 3 (spec section 33)."""
+
+    events_total: int
+    events_by_status: dict[str, int]
+    events_verified: int
+    events_unverified: int
+    events_with_conflicts: int
+    facts_total: int
+    conflicts_total: int
+    conflicts_unresolved: int
+    mean_confidence: float | None
+    low_confidence_published: int
+    generated_at: datetime

@@ -9,6 +9,7 @@ from app.models.event import (
     Event,
     EventConflict,
     EventFact,
+    EventFactSource,
     EventReport,
     EventUpdate,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "Event",
     "EventConflict",
     "EventFact",
+    "EventFactSource",
     "EventReport",
     "EventUpdate",
     "ProcessingJob",

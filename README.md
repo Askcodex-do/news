@@ -18,7 +18,7 @@ This repository is being built in phases (see the task specification).
 | --- | --- | --- |
 | 1 | Foundation: repo, Docker, PostgreSQL, FastAPI, Next.js, migrations, config, tests | **implemented** |
 | 2 | News ingestion: source management, RSS/API ingestion, normalization, URL dedup, hashing, source health | **implemented** |
-| 3 | Event intelligence: semantic dedup, clustering, fact extraction, source independence, confidence | planned |
+| 3 | Event intelligence: semantic dedup, clustering, fact extraction, source independence, confidence | **implemented** |
 | 4 | AI editorial system: importance, generation, fact validation, attribution, versions | planned |
 | 5 | Localization: IP → country, country → configured source, local/global ranking, 20 + 20 feeds | partial (geo + feed scaffold) |
 | 6 | Images: generation with transient handling, no permanent storage | planned |
@@ -58,6 +58,25 @@ What Phase 2 adds:
   thing 24/7 and survives any single failure.
 - Admin/ops endpoints under `/admin` (token-protected) for source health, queue
   depth, ingestion counters, manual polling and scheduler control.
+
+What Phase 3 adds:
+
+- Event clustering (`app/services/clustering.py`): reports about the same
+  real-world event collapse into one `event`, compared on headline semantics
+  plus entity and number overlap, bounded by a time window. Ten articles about
+  one earthquake become one event, not ten stories.
+- Fact extraction (`app/services/facts.py`): entities, quantities and an event
+  type per report, with unit aliases so "killed" and "deaths" agree.
+- Source independence (`app/services/independence.py`): near-duplicate reports
+  count as one independent chain, so ten sites republishing one wire story are
+  not ten confirmations.
+- Verification and confidence (`app/services/verification.py`,
+  `app/services/confidence.py`): facts, conflicts, recency-based supersession
+  and a 0-100 confidence score with configurable publish thresholds.
+- Admin observability: `GET /admin/events`, `GET /admin/intelligence/stats`
+  and `POST /admin/events/{id}/verify` for operator review.
+- `python -m app.cli cluster-backfill` clusters reports ingested before Phase 3
+  so an upgrade does not wait for the next poll cycle.
 
 ## Quick start (Docker Compose)
 

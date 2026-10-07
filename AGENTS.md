@@ -12,15 +12,16 @@ Non-negotiable product rule: **accuracy outranks speed, volume, SEO and
 engagement.** "Not enough verified information to publish" is a valid outcome
 and must be implemented as a product behavior, not just an AI prompt.
 
-The spec is delivered in phases. Phases 1 (foundation) and 2 (news ingestion)
-are complete; see `README.md` for the phase table.
+The spec is delivered in phases. Phases 1 (foundation), 2 (news ingestion) and
+3 (event intelligence: clustering, verification, confidence) are complete; see
+`README.md` for the phase table.
 
 ## Commands
 
 ```bash
 # Backend
 cd backend && . .venv/bin/activate
-pytest                       # 62 tests; DB tests use isolated news_test
+pytest                       # 101 tests; DB tests use isolated news_test
 ruff check app tests
 ruff format app tests
 alembic upgrade head         # run from backend/
@@ -31,6 +32,9 @@ python -m app.cli export-seeds
 python -m app.cli worker             # continuous 24/7 loop
 python -m app.cli ingest-once        # one scheduling + execution pass
 python -m app.cli poll-source bbc-world
+
+# Event intelligence (Phase 3)
+python -m app.cli cluster-backfill   # cluster reports that predate Phase 3
 
 # Full stack
 docker compose up -d --build
@@ -82,6 +86,30 @@ docker compose logs -f backend worker
   a success clears the failure streak.
 - Admin API: `/admin/*` (token-protected) — source health, queue depth, stats,
   manual poll, scheduler run.
+
+## Event intelligence (Phase 3)
+
+- Pipeline: report → `app/services/clustering.py` → event → `app/services/verification.py`
+  → facts/conflicts/confidence. The scheduler enqueues `cluster_event` after
+  storing a report; clustering enqueues `verify_event`.
+- Clustering signals: `app/services/embeddings.py` (headline embedding),
+  `app/services/facts.py` (entities, numbers, event type). `similarity()` combines
+  semantic + entity + number overlap. A type mismatch is a **penalty**
+  (`CLUSTER_TYPE_MISMATCH_PENALTY`), not a veto — keyword type labels are
+  imperfect, so identical headlines must still merge across labels.
+- Embeddings are computed from the **headline only**. Bodies are frequently
+  syndicated near-verbatim and would make unrelated stories look alike.
+- Candidates are time-bounded (`EVENT_TIME_WINDOW_HOURS`) and ordered by vector
+  distance, capped at `MAX_CANDIDATES`. Distance ordering (not recency) is what
+  keeps the cap safe during a burst — a recency cap silently splits one event
+  into many. Migration `5b8c1f2a9d47` adds the HNSW index this relies on.
+- Verification: `app/services/independence.py` collapses near-duplicate reports
+  into one independent chain (spec §11) before confidence is scored
+  (`app/services/confidence.py`). Supersession is recency-based (spec §23).
+- Admin API: `GET /admin/events`, `GET /admin/intelligence/stats`,
+  `POST /admin/events/{id}/verify`.
+- `python -m app.cli cluster-backfill` clusters reports that were ingested before
+  Phase 3 existed, so an upgrade does not wait for the next poll cycle.
 
 ## Testing conventions
 

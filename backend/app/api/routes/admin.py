@@ -7,6 +7,7 @@ read the queue, trigger a single source, and watch ingestion counters.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,15 +16,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin
 from app.db.session import get_session
-from app.models.enums import SourceReportStatus
+from app.models.enums import EventStatus, SourceReportStatus
+from app.models.event import Event, EventConflict, EventFact
 from app.models.job import ProcessingJob
 from app.models.source import Source, SourceHealth
 from app.models.source_report import SourceReport
-from app.schemas import IngestionStatsOut, JobOut, SourceHealthRow
+from app.schemas import (
+    EventConflictOut,
+    EventDetailOut,
+    EventFactOut,
+    EventIntelligenceStatsOut,
+    IngestionStatsOut,
+    JobOut,
+    SourceHealthRow,
+)
 from app.services import queue
 from app.services.ingestion import ingest_source
 from app.services.queue import JobType
 from app.services.scheduler import enqueue_due_sources
+from app.services.verification import verify_event
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -139,3 +150,130 @@ async def ingestion_stats(session: AsyncSession = Depends(get_session)) -> Inges
         queue=await queue.queue_depth(session),
         generated_at=now,
     )
+
+
+@router.get("/events", response_model=list[EventDetailOut])
+async def list_events(
+    session: AsyncSession = Depends(get_session),
+    status_filter: EventStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> list[EventDetailOut]:
+    """Recent events with their evidence, for operator review."""
+    stmt = select(Event).order_by(Event.last_updated_at.desc()).limit(limit)
+    if status_filter is not None:
+        stmt = stmt.where(Event.status == status_filter)
+    events = list((await session.execute(stmt)).scalars().all())
+
+    result: list[EventDetailOut] = []
+    for event in events:
+        facts = (
+            (
+                await session.execute(
+                    select(EventFact)
+                    .where(EventFact.event_id == event.id)
+                    .order_by(EventFact.fact_type, EventFact.fact_key)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        conflicts = (
+            (await session.execute(select(EventConflict).where(EventConflict.event_id == event.id)))
+            .scalars()
+            .all()
+        )
+        result.append(
+            EventDetailOut(
+                id=event.id,
+                title=event.title,
+                event_type=event.event_type,
+                country=event.country,
+                status=event.status,
+                confidence_score=event.confidence_score,
+                importance_score=event.importance_score,
+                first_detected_at=event.first_detected_at,
+                last_updated_at=event.last_updated_at,
+                report_count=event.report_count,
+                independent_source_count=event.independent_source_count,
+                conflict_count=event.conflict_count,
+                facts=[EventFactOut.model_validate(fact) for fact in facts],
+                conflicts=[EventConflictOut.model_validate(conflict) for conflict in conflicts],
+            )
+        )
+    return result
+
+
+@router.get("/intelligence/stats", response_model=EventIntelligenceStatsOut)
+async def intelligence_stats(
+    session: AsyncSession = Depends(get_session),
+) -> EventIntelligenceStatsOut:
+    """Accuracy dashboard: how much is verified, conflicted, or uncertain."""
+    now = datetime.now(UTC)
+
+    async def scalar(stmt) -> float | int | None:  # type: ignore[no-untyped-def]
+        return (await session.execute(stmt)).scalar_one()
+
+    events_total = int(await scalar(select(func.count()).select_from(Event)) or 0)
+    status_rows = (
+        await session.execute(select(Event.status, func.count()).group_by(Event.status))
+    ).all()
+    events_by_status = {str(status): int(count) for status, count in status_rows}
+
+    facts_total = int(await scalar(select(func.count()).select_from(EventFact)) or 0)
+    conflicts_total = int(await scalar(select(func.count()).select_from(EventConflict)) or 0)
+    conflicts_unresolved = int(
+        await scalar(
+            select(func.count())
+            .select_from(EventConflict)
+            .where(EventConflict.status == "unresolved")
+        )
+        or 0
+    )
+    events_with_conflicts = int(
+        await scalar(select(func.count()).select_from(Event).where(Event.conflict_count > 0)) or 0
+    )
+    mean_confidence = await scalar(select(func.avg(Event.confidence_score)))
+    low_confidence_published = int(
+        await scalar(
+            select(func.count())
+            .select_from(Event)
+            .where(
+                Event.status.in_((EventStatus.PUBLISHED, EventStatus.UPDATING)),
+                Event.confidence_score < 70,
+            )
+        )
+        or 0
+    )
+
+    return EventIntelligenceStatsOut(
+        events_total=events_total,
+        events_by_status=events_by_status,
+        events_verified=int(events_by_status.get(EventStatus.VERIFIED.value, 0)),
+        events_unverified=int(events_by_status.get(EventStatus.UNVERIFIED.value, 0)),
+        events_with_conflicts=events_with_conflicts,
+        facts_total=facts_total,
+        conflicts_total=conflicts_total,
+        conflicts_unresolved=conflicts_unresolved,
+        mean_confidence=round(float(mean_confidence), 2) if mean_confidence is not None else None,
+        low_confidence_published=low_confidence_published,
+        generated_at=now,
+    )
+
+
+@router.post("/events/{event_id}/verify")
+async def verify_event_now(
+    event_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Re-run verification for one event (facts, conflicts, confidence)."""
+    try:
+        event = await verify_event(session, event_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {
+        "event_id": str(event.id),
+        "status": event.status.value,
+        "confidence_score": event.confidence_score,
+        "independent_source_count": event.independent_source_count,
+        "conflict_count": event.conflict_count,
+    }

@@ -205,6 +205,33 @@ async def test_claim_next_marks_job_running_and_is_exclusive(db_session, clean_q
     await db_session.commit()
 
 
+async def test_claim_next_prefers_earlier_job_types(db_session, clean_queue):
+    """A pending poll must not starve a pending clustering job.
+
+    The worker claims several job types at once; without a priority order the
+    oldest job wins and a steady stream of polls starves clustering.
+    """
+    poll_key = f"poll_source:test:{uuid.uuid4().hex}"
+    cluster_key = f"cluster_event:test:{uuid.uuid4().hex}"
+    await queue.enqueue(db_session, job_type=JobType.POLL_SOURCE, idempotency_key=poll_key)
+    await db_session.commit()
+    await queue.enqueue(db_session, job_type=JobType.CLUSTER_EVENT, idempotency_key=cluster_key)
+    await db_session.commit()
+
+    claimed = await queue.claim_next(
+        db_session,
+        job_types=(JobType.CLUSTER_EVENT, JobType.POLL_SOURCE),
+        locked_by="w1",
+    )
+    assert claimed is not None
+    assert claimed.job_type == JobType.CLUSTER_EVENT.value
+
+    await db_session.execute(
+        delete(ProcessingJob).where(ProcessingJob.idempotency_key.in_([poll_key, cluster_key]))
+    )
+    await db_session.commit()
+
+
 async def test_failed_job_is_retried_with_backoff_then_dead_lettered(db_session, clean_queue):
     key = f"poll_source:test:{uuid.uuid4().hex}"
     await queue.enqueue(

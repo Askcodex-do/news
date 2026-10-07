@@ -45,8 +45,10 @@ class ScheduleResult:
     already_queued: int = 0
 
 
-# Job types the worker loop executes, in priority order.
-_HANDLED_JOB_TYPES = (JobType.POLL_SOURCE, JobType.CLUSTER_EVENT, JobType.VERIFY_EVENT)
+# Job types the worker loop executes, in priority order. Clustering and
+# verification are latency-sensitive (they gate publishing) and are produced by
+# polling, so they run ahead of the next poll.
+_HANDLED_JOB_TYPES = (JobType.CLUSTER_EVENT, JobType.VERIFY_EVENT, JobType.POLL_SOURCE)
 
 
 def _now() -> datetime:
@@ -210,9 +212,10 @@ async def process_pending_jobs(session: AsyncSession, *, worker: str, max_jobs: 
 
 
 async def _claim_any(session: AsyncSession, worker: str) -> ProcessingJob | None:
-    """Claim the oldest runnable job across every handled job type."""
-    for job_type in _HANDLED_JOB_TYPES:
-        job = await queue.claim_next(session, job_type=job_type, locked_by=worker)
-        if job is not None:
-            return job
-    return None
+    """Claim the oldest runnable job across every handled job type.
+
+    A single priority-ordered claim, not one claim per type: claiming per type
+    would always return a poll job when one is pending and starve the
+    clustering and verification stages behind a steady stream of polls.
+    """
+    return await queue.claim_next(session, job_types=_HANDLED_JOB_TYPES, locked_by=worker)

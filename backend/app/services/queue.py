@@ -18,11 +18,12 @@ from __future__ import annotations
 import json
 import socket
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,22 +117,39 @@ async def enqueue(
 async def claim_next(
     session: AsyncSession,
     *,
-    job_type: JobType,
+    job_type: JobType | None = None,
+    job_types: Sequence[JobType] | None = None,
     locked_by: str,
 ) -> ProcessingJob | None:
-    """Atomically claim the oldest runnable job of ``job_type``, or None.
+    """Atomically claim the oldest runnable job, or None.
 
-    ``FOR UPDATE SKIP LOCKED`` lets N workers poll concurrently without
-    blocking or double-processing.
+    Pass ``job_type`` for a single type, or ``job_types`` for several ordered by
+    preference. ``FOR UPDATE SKIP LOCKED`` lets N workers poll concurrently
+    without blocking or double-processing.
     """
-    stmt = (
-        select(ProcessingJob)
-        .where(
-            ProcessingJob.job_type == job_type.value,
-            ProcessingJob.status == JobStatus.PENDING,
-            (ProcessingJob.run_after.is_(None)) | (ProcessingJob.run_after <= _now()),
+    if job_type is not None:
+        types = [job_type]
+    elif job_types:
+        types = list(job_types)
+    else:
+        raise ValueError("claim_next requires job_type or job_types")
+
+    stmt = select(ProcessingJob).where(
+        ProcessingJob.job_type.in_([t.value for t in types]),
+        ProcessingJob.status == JobStatus.PENDING,
+        (ProcessingJob.run_after.is_(None)) | (ProcessingJob.run_after <= _now()),
+    )
+    if len(types) > 1:
+        # Prefer earlier types so latency-sensitive stages (clustering,
+        # verification) are not starved by a steady stream of poll jobs.
+        priority = case(
+            {t.value: index for index, t in enumerate(types)},
+            value=ProcessingJob.job_type,
+            else_=len(types),
         )
-        .order_by(ProcessingJob.run_after.asc().nulls_first(), ProcessingJob.created_at.asc())
+        stmt = stmt.order_by(priority)
+    stmt = (
+        stmt.order_by(ProcessingJob.run_after.asc().nulls_first(), ProcessingJob.created_at.asc())
         .limit(1)
         .with_for_update(skip_locked=True)
     )

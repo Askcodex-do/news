@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
-from app.models.article import Article, ArticleSource
-from app.schemas import ArticleCard, ArticleDetail, SourceAttribution
+from app.models.article import Article, ArticleImage, ArticleSource
+from app.schemas import ArticleCard, ArticleDetail, ArticleImageOut, SourceAttribution
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 
@@ -45,4 +45,11 @@ async def get_article(slug: str, session: AsyncSession = Depends(get_session)) -
         SourceAttribution(source_name=s.source_name, url=s.url, is_independent=s.is_independent)
         for s in sources
     ]
+    # Only the transient reference is exposed, never stored bytes (spec §20).
+    image = (
+        await session.execute(
+            select(ArticleImage).where(ArticleImage.article_id == article.id).limit(1)
+        )
+    ).scalar_one_or_none()
+    detail.image = ArticleImageOut.model_validate(image) if image else None
     return detail

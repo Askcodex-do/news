@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.models.article import Article
 from app.models.enums import EventStatus
 from app.models.job import ProcessingJob
 from app.models.source import Source
@@ -32,6 +33,7 @@ from app.services.article_generation import (
     generate_localized_articles,
 )
 from app.services.clustering import cluster_report
+from app.services.images import attach_image_to_article, image_provider_configured
 from app.services.ingestion import IngestStats, ingest_source
 from app.services.queue import JobType
 from app.services.verification import verify_event
@@ -57,6 +59,7 @@ _HANDLED_JOB_TYPES = (
     JobType.CLUSTER_EVENT,
     JobType.VERIFY_EVENT,
     JobType.GENERATE_ARTICLE,
+    JobType.GENERATE_IMAGE,
     JobType.POLL_SOURCE,
 )
 
@@ -197,9 +200,49 @@ async def _run_generate_job(session: AsyncSession, job_payload: str | None) -> s
     if outcome.published:
         for country, result in (await generate_localized_articles(session, event_id)).items():
             localized[country] = result.published
+        # Image generation is a separate, optional job so it can never delay or
+        # block publication (spec section 27).
+        await _enqueue_image_jobs(session, event_id)
     return (
         f"event {event_id} published={outcome.published} ({outcome.reason}) localized={localized}"
     )
+
+
+async def _enqueue_image_jobs(session: AsyncSession, event_id: uuid.UUID) -> None:
+    """Enqueue one image job per published article of an event, if enabled.
+
+    With no image provider configured nothing is enqueued, so the worker never
+    spins on a deployment that has no image key.
+    """
+    if not image_provider_configured():
+        return
+    article_ids = (
+        (
+            await session.execute(
+                select(Article.id).where(
+                    Article.event_id == event_id, Article.is_published.is_(True)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for article_id in article_ids:
+        await queue.enqueue(
+            session,
+            job_type=JobType.GENERATE_IMAGE,
+            idempotency_key=f"{JobType.GENERATE_IMAGE.value}:{article_id}",
+            payload={"article_id": str(article_id)},
+        )
+
+
+async def _run_image_job(session: AsyncSession, job_payload: str | None) -> str:
+    payload = json.loads(job_payload) if job_payload else {}
+    article_id = uuid.UUID(payload["article_id"])
+    image = await attach_image_to_article(session, article_id)
+    if image is None:
+        return f"article {article_id} no image (published without one)"
+    return f"article {article_id} image provider={image.image_provider}"
 
 
 async def process_pending_jobs(session: AsyncSession, *, worker: str, max_jobs: int = 25) -> int:
@@ -236,6 +279,11 @@ async def process_pending_jobs(session: AsyncSession, *, worker: str, max_jobs: 
                 logger.debug("job %s done: %s", job_id, summary)
             elif job_type == JobType.GENERATE_ARTICLE.value:
                 summary = await _run_generate_job(session, job.payload)
+                await queue.mark_succeeded(session, job)
+                await session.commit()
+                logger.debug("job %s done: %s", job_id, summary)
+            elif job_type == JobType.GENERATE_IMAGE.value:
+                summary = await _run_image_job(session, job.payload)
                 await queue.mark_succeeded(session, job)
                 await session.commit()
                 logger.debug("job %s done: %s", job_id, summary)

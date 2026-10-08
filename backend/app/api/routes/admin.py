@@ -35,6 +35,11 @@ from app.services.article_generation import (
     generate_article_for_event,
     generate_localized_articles,
 )
+from app.services.images import (
+    attach_image_to_article,
+    image_provider_configured,
+    purge_expired_image_references,
+)
 from app.services.ingestion import ingest_source
 from app.services.queue import JobType
 from app.services.scheduler import enqueue_due_sources
@@ -334,6 +339,41 @@ async def localize_event_now(
             for country, outcome in outcomes.items()
         },
     }
+
+
+@router.post("/articles/{article_id}/image")
+async def generate_article_image(
+    article_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Generate (or reuse) an article image reference (spec section 20).
+
+    Only metadata is stored — provider, generation id, prompt hash and a
+    transient URL. If no image provider is configured the article is left
+    without an image; publication is never affected (spec section 27).
+    """
+    if not image_provider_configured():
+        return {"article_id": str(article_id), "generated": False, "reason": "no image provider"}
+    image = await attach_image_to_article(session, article_id)
+    await session.commit()
+    if image is None:
+        return {"article_id": str(article_id), "generated": False, "reason": "no image produced"}
+    return {
+        "article_id": str(article_id),
+        "generated": True,
+        "image_provider": image.image_provider,
+        "generation_id": image.generation_id,
+        "prompt_hash": image.prompt_hash,
+        "ephemeral_url": image.ephemeral_url,
+        "expires_at": image.expires_at,
+    }
+
+
+@router.post("/images/purge")
+async def purge_images(session: AsyncSession = Depends(get_session)) -> dict:
+    """Delete expired transient image references (spec section 20)."""
+    removed = await purge_expired_image_references(session)
+    await session.commit()
+    return {"purged": removed}
 
 
 @router.get("/articles/rejected")

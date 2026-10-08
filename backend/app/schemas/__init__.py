@@ -76,6 +76,18 @@ class SourceAttribution(BaseModel):
     is_independent: bool
 
 
+class ArticleImageOut(BaseModel):
+    """Image *metadata* only — never image bytes (spec section 20)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    image_provider: str
+    generation_id: str | None
+    prompt_hash: str
+    ephemeral_url: str | None
+    expires_at: datetime | None
+
+
 class ArticleDetail(ArticleCard):
     body: str
     key_points: list | None
@@ -84,6 +96,7 @@ class ArticleDetail(ArticleCard):
     seo_description: str | None
     current_version: int
     sources: list[SourceAttribution] = []
+    image: ArticleImageOut | None = None
 
 
 class FeedResponse(BaseModel):

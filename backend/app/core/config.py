@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     ai_base_url: str = ""
     image_provider: str = ""
     image_api_key: str = Field(default="", repr=False)
+    image_model: str = "gpt-image-1"
+    image_base_url: str = ""
+    # Images are optional: disabled means no image jobs are enqueued and
+    # articles publish without one (spec section 27).
+    image_enabled: bool = True
+    # How long a transient provider URL is considered valid before its
+    # reference is purged. We never store image bytes (spec section 20).
+    image_url_ttl_seconds: int = 3600
 
     # Embeddings (Phase 3 clustering). The default hashing provider runs fully
     # offline and deterministically; set provider=openai to use a real model.

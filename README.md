@@ -21,7 +21,7 @@ This repository is being built in phases (see the task specification).
 | 3 | Event intelligence: semantic dedup, clustering, fact extraction, source independence, confidence | **implemented** |
 | 4 | AI editorial system: importance, generation, fact validation, attribution, versions | **implemented** |
 | 5 | Localization: IP → country, country → configured source, local/global ranking, 20 + 20 feeds | **implemented** |
-| 6 | Images: generation with transient handling, no permanent storage | planned |
+| 6 | Images: generation with transient handling, no permanent storage | **implemented** |
 | 7 | Continuous operation: queues, retries, scheduling, monitoring, 24/7 workers | partial (queue + worker loop) |
 | 8 | Production hardening: security, load/accuracy/duplicate testing, DR, backups, cost controls | planned |
 
@@ -115,6 +115,26 @@ What Phase 5 adds:
   local impact.
 - `GET /feed` now serves the ranked global + local feed, and the Next.js page
   forwards the visitor IP so the local column matches their country.
+
+What Phase 6 adds:
+
+- An image provider abstraction (`app/services/images.py`): an OpenAI generator
+  (`IMAGE_PROVIDER=openai`) and a null provider. The image prompt is derived from
+  the *event* (headline, location, category) with explicit neutrality
+  constraints — not from a source's photo or framing.
+- No permanent image storage (spec section 20): the platform keeps only
+  metadata — provider, generation id, prompt hash, and a transient URL with an
+  expiry. A base64 response is reduced to a hash and its bytes are discarded;
+  nothing is written to disk or the database.
+- Optional, non-blocking images (spec section 27): image generation runs as its
+  own `generate_image` job, enqueued only after an article is published and only
+  when a provider is configured. A failing or absent provider is swallowed and
+  the article stands without an image.
+- Expiry hygiene: `purge_expired_image_references` (and `POST /admin/images/purge`)
+  drops transient URL references once they expire, so no stale third-party link
+  lingers.
+- Article detail exposes image metadata only, and
+  `POST /admin/articles/{id}/image` generates or reuses a reference on demand.
 
 ## Quick start (Docker Compose)
 

@@ -83,6 +83,16 @@ class Settings(BaseSettings):
     # Relative tolerance before two numeric claims count as a conflict.
     conflict_relative_tolerance: float = 0.05
 
+    # AI editorial system (spec sections 16-19, 29)
+    # Generate an article only for events at/above this importance, even if
+    # confidence is high: a confirmed trivial event is not worth publishing.
+    min_importance_to_publish: float = 30.0
+    # Fraction of a draft's 8-grams allowed to match one source report verbatim
+    # before the draft is rejected as copying (spec section 17).
+    max_source_copy_overlap: float = 0.30
+    # Re-run the AI fact-check pass on every draft (spec section 28, layer 5).
+    ai_fact_check_enabled: bool = True
+
     # Cost controls
     ai_max_requests_per_hour: int = 500
     ai_max_tokens_per_article: int = 4000

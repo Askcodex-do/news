@@ -31,6 +31,7 @@ from app.schemas import (
     SourceHealthRow,
 )
 from app.services import queue
+from app.services.article_generation import generate_article_for_event
 from app.services.ingestion import ingest_source
 from app.services.queue import JobType
 from app.services.scheduler import enqueue_due_sources
@@ -277,3 +278,62 @@ async def verify_event_now(
         "independent_source_count": event.independent_source_count,
         "conflict_count": event.conflict_count,
     }
+
+
+@router.post("/events/{event_id}/generate")
+async def generate_article_now(
+    event_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Generate (or update) the article for one event, validating before publish.
+
+    Requires a configured AI provider. On any validation failure the event is
+    left unpublished and the reason is returned — this endpoint never publishes
+    an unsupported article.
+    """
+    try:
+        outcome = await generate_article_for_event(session, event_id, reason="manual")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {
+        "event_id": str(event_id),
+        "article_id": str(outcome.article_id) if outcome.article_id else None,
+        "published": outcome.published,
+        "reason": outcome.reason,
+        "version": outcome.version,
+        "failures": outcome.validation.failures if outcome.validation else [],
+    }
+
+
+@router.get("/articles/rejected")
+async def list_rejected_articles(
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(50, ge=1, le=200),
+) -> list[dict]:
+    """Events in editorial review that have no published article.
+
+    The accuracy dashboard's rejected queue: these are the stories the system
+    chose not to publish, which is a feature (spec section 15), not an outage.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(Event)
+                .where(Event.status == EventStatus.EDITORIAL_REVIEW)
+                .order_by(Event.importance_score.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "event_id": str(event.id),
+            "title": event.title,
+            "confidence_score": event.confidence_score,
+            "importance_score": event.importance_score,
+            "conflict_count": event.conflict_count,
+        }
+        for event in rows
+    ]

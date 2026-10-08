@@ -23,9 +23,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.models.enums import EventStatus
 from app.models.job import ProcessingJob
 from app.models.source import Source
 from app.services import queue
+from app.services.article_generation import generate_article_for_event
 from app.services.clustering import cluster_report
 from app.services.ingestion import IngestStats, ingest_source
 from app.services.queue import JobType
@@ -48,7 +50,12 @@ class ScheduleResult:
 # Job types the worker loop executes, in priority order. Clustering and
 # verification are latency-sensitive (they gate publishing) and are produced by
 # polling, so they run ahead of the next poll.
-_HANDLED_JOB_TYPES = (JobType.CLUSTER_EVENT, JobType.VERIFY_EVENT, JobType.POLL_SOURCE)
+_HANDLED_JOB_TYPES = (
+    JobType.CLUSTER_EVENT,
+    JobType.VERIFY_EVENT,
+    JobType.GENERATE_ARTICLE,
+    JobType.POLL_SOURCE,
+)
 
 
 def _now() -> datetime:
@@ -163,7 +170,24 @@ async def _run_verify_job(session: AsyncSession, job_payload: str | None) -> str
     payload = json.loads(job_payload) if job_payload else {}
     event_id = uuid.UUID(payload["event_id"])
     event = await verify_event(session, event_id)
+    # A verified event, or an already-published one that just changed, gets an
+    # article (spec section 22: one article, updated). Keyed by report count so
+    # each distinct membership state generates once and retries are safe.
+    if event.status in (EventStatus.VERIFIED, EventStatus.PUBLISHED, EventStatus.UPDATING):
+        await queue.enqueue(
+            session,
+            job_type=JobType.GENERATE_ARTICLE,
+            idempotency_key=(f"{JobType.GENERATE_ARTICLE.value}:{event.id}:r{event.report_count}"),
+            payload={"event_id": str(event.id)},
+        )
     return f"event {event.id} status={event.status} confidence={event.confidence_score:.1f}"
+
+
+async def _run_generate_job(session: AsyncSession, job_payload: str | None) -> str:
+    payload = json.loads(job_payload) if job_payload else {}
+    event_id = uuid.UUID(payload["event_id"])
+    outcome = await generate_article_for_event(session, event_id)
+    return f"event {event_id} published={outcome.published} ({outcome.reason})"
 
 
 async def process_pending_jobs(session: AsyncSession, *, worker: str, max_jobs: int = 25) -> int:
@@ -195,6 +219,11 @@ async def process_pending_jobs(session: AsyncSession, *, worker: str, max_jobs: 
                 logger.debug("job %s done: %s", job_id, summary)
             elif job_type == JobType.VERIFY_EVENT.value:
                 summary = await _run_verify_job(session, job.payload)
+                await queue.mark_succeeded(session, job)
+                await session.commit()
+                logger.debug("job %s done: %s", job_id, summary)
+            elif job_type == JobType.GENERATE_ARTICLE.value:
+                summary = await _run_generate_job(session, job.payload)
                 await queue.mark_succeeded(session, job)
                 await session.commit()
                 logger.debug("job %s done: %s", job_id, summary)

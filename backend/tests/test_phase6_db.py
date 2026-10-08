@@ -14,18 +14,11 @@ import pytest
 from sqlalchemy import delete, select
 
 from app.models.article import Article, ArticleImage
-from app.models.enums import EventStatus, SourceReportStatus, SourceType
+from app.models.enums import EventStatus
 from app.models.event import (
     Event,
-    EventConflict,
-    EventFact,
-    EventFactSource,
-    EventReport,
-    EventUpdate,
 )
 from app.models.job import ProcessingJob
-from app.models.source import Source
-from app.models.source_report import SourceReport
 from app.services.images import (
     GeneratedImage,
     ImageProvider,
@@ -85,90 +78,6 @@ async def clean_image_jobs(db_session):
     await _clean()
     yield
     await _clean()
-
-
-@pytest.fixture
-async def clean_articles(db_session, clean_events):
-    from app.models.article import ArticleSource, ArticleVersion
-
-    async def _clean() -> None:
-        await db_session.execute(delete(ArticleImage))
-        await db_session.execute(delete(ArticleVersion))
-        await db_session.execute(delete(ArticleSource))
-        await db_session.execute(delete(Article))
-        await db_session.commit()
-
-    await _clean()
-    yield
-    await _clean()
-
-
-@pytest.fixture
-async def clean_events(db_session, make_source):
-    async def _clean() -> None:
-        await db_session.execute(delete(EventUpdate))
-        await db_session.execute(delete(EventConflict))
-        await db_session.execute(delete(EventReport))
-        await db_session.execute(delete(EventFactSource))
-        await db_session.execute(delete(EventFact))
-        await db_session.execute(delete(Event))
-        await db_session.commit()
-
-    await _clean()
-    yield
-    await _clean()
-
-
-@pytest.fixture
-async def make_source(db_session):
-    created: list[uuid.UUID] = []
-
-    async def _make(*, name: str) -> Source:
-        src = Source(
-            slug=f"p6-{uuid.uuid4().hex[:8]}",
-            name=name,
-            type=SourceType.rss,
-            website_url="https://example.com",
-            rss_url="https://example.com/rss.xml",
-            language="en",
-            poll_interval_seconds=300,
-            reliability_score=85.0,
-        )
-        db_session.add(src)
-        await db_session.flush()
-        created.append(src.id)
-        return src
-
-    yield _make
-    for source_id in created:
-        await db_session.execute(delete(SourceReport).where(SourceReport.source_id == source_id))
-    for source_id in reversed(created):
-        await db_session.execute(delete(Source).where(Source.id == source_id))
-    await db_session.commit()
-
-
-@pytest.fixture
-async def make_report(db_session):
-    async def _make(source: Source, *, title: str, description: str = "") -> SourceReport:
-        now = datetime.now(UTC)
-        token = uuid.uuid4().hex
-        report = SourceReport(
-            source_id=source.id,
-            source_url=f"https://example.com/{token}",
-            canonical_url=f"https://example.com/{token}",
-            canonical_url_hash=token + token,
-            title=title,
-            description=description or None,
-            published_at=now,
-            retrieved_at=now,
-            content_hash=token + token,
-            status=SourceReportStatus.NEW,
-        )
-        db_session.add(report)
-        await db_session.flush()
-        return report
-
-    return _make
 
 
 async def _published_article(db_session, make_source, make_report) -> Article:

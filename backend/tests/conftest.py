@@ -96,3 +96,130 @@ async def db_session():
     async with SessionLocal() as session:
         yield session
         await session.rollback()
+
+
+# --- Shared fixtures for database-backed tests -------------------------------
+# Factories that build real rows and clean them up, so DB tests share one
+# definition of a source/report/event rather than copying setup per module.
+
+
+@pytest.fixture
+async def make_source(db_session):
+    import uuid as _uuid
+
+    from sqlalchemy import delete
+
+    from app.models.enums import SourceType
+    from app.models.source import Source, SourceHealth
+    from app.models.source_report import SourceReport
+
+    created: list = []
+
+    async def _make(*, name: str) -> Source:
+        src = Source(
+            slug=f"t-{_uuid.uuid4().hex[:8]}",
+            name=name,
+            type=SourceType.rss,
+            website_url="https://example.com",
+            rss_url="https://example.com/rss.xml",
+            language="en",
+            poll_interval_seconds=300,
+            reliability_score=85.0,
+        )
+        db_session.add(src)
+        await db_session.flush()
+        created.append(src.id)
+        return src
+
+    yield _make
+    for source_id in created:
+        await db_session.execute(delete(SourceReport).where(SourceReport.source_id == source_id))
+    for source_id in created:
+        await db_session.execute(delete(SourceHealth).where(SourceHealth.source_id == source_id))
+    for source_id in reversed(created):
+        await db_session.execute(delete(Source).where(Source.id == source_id))
+    await db_session.commit()
+
+
+@pytest.fixture
+async def make_report(db_session):
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    from app.models.enums import SourceReportStatus
+    from app.models.source import Source
+    from app.models.source_report import SourceReport
+
+    async def _make(source: Source, *, title: str, description: str = "") -> SourceReport:
+        now = datetime.now(UTC)
+        token = _uuid.uuid4().hex
+        report = SourceReport(
+            source_id=source.id,
+            source_url=f"https://example.com/{token}",
+            canonical_url=f"https://example.com/{token}",
+            canonical_url_hash=token + token,
+            title=title,
+            description=description or None,
+            published_at=now,
+            retrieved_at=now,
+            content_hash=token + token,
+            status=SourceReportStatus.NEW,
+        )
+        db_session.add(report)
+        await db_session.flush()
+        return report
+
+    return _make
+
+
+@pytest.fixture
+async def clean_events(db_session):
+    from sqlalchemy import delete
+
+    from app.models.article import Article, ArticleImage, ArticleSource, ArticleVersion
+    from app.models.event import (
+        Event,
+        EventConflict,
+        EventFact,
+        EventFactSource,
+        EventReport,
+        EventUpdate,
+    )
+
+    async def _clean() -> None:
+        # Articles reference events, so clear them first or the Event delete
+        # trips the foreign key. Wiping them here keeps every DB test isolated
+        # even when a prior test's own cleanup was skipped.
+        await db_session.execute(delete(ArticleImage))
+        await db_session.execute(delete(ArticleVersion))
+        await db_session.execute(delete(ArticleSource))
+        await db_session.execute(delete(Article))
+        await db_session.execute(delete(EventUpdate))
+        await db_session.execute(delete(EventConflict))
+        await db_session.execute(delete(EventReport))
+        await db_session.execute(delete(EventFactSource))
+        await db_session.execute(delete(EventFact))
+        await db_session.execute(delete(Event))
+        await db_session.commit()
+
+    await _clean()
+    yield
+    await _clean()
+
+
+@pytest.fixture
+async def clean_articles(db_session, clean_events):
+    from sqlalchemy import delete
+
+    from app.models.article import Article, ArticleImage, ArticleSource, ArticleVersion
+
+    async def _clean() -> None:
+        await db_session.execute(delete(ArticleImage))
+        await db_session.execute(delete(ArticleVersion))
+        await db_session.execute(delete(ArticleSource))
+        await db_session.execute(delete(Article))
+        await db_session.commit()
+
+    await _clean()
+    yield
+    await _clean()

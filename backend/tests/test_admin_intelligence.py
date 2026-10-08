@@ -9,12 +9,13 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.services.seeding import seed
 from tests.conftest import database_available
 
-ADMIN_HEADERS = {"X-Admin-Token": "dev-admin-token"}
+ADMIN_HEADERS = {"X-Admin-Token": settings.admin_api_token}
 
 
 @pytest.fixture(scope="session")

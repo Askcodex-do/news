@@ -8,7 +8,7 @@ import json
 import uuid
 from pathlib import Path
 
-from app.core.config import REPO_ROOT
+from app.core.config import REPO_ROOT, settings
 from app.db.session import SessionLocal
 from app.services.config_loader import (
     load_all_sources,
@@ -29,6 +29,15 @@ async def _worker(tick_seconds: int) -> None:
     from app.services.worker_loop import run_worker
 
     await run_worker(tick_seconds=tick_seconds)
+
+
+async def _maintenance() -> None:
+    """One housekeeping sweep: archive stale events, prune finished jobs."""
+    from app.services.maintenance import run_maintenance
+
+    async with SessionLocal() as session:
+        result = await run_maintenance(session)
+    print(result.as_dict())
 
 
 async def _ingest_once() -> None:
@@ -150,7 +159,8 @@ def main() -> None:
     )
     backfill.add_argument("--limit", type=int, default=None)
     worker = sub.add_parser("worker", help="run the continuous ingestion worker")
-    worker.add_argument("--tick-seconds", type=int, default=10)
+    worker.add_argument("--tick-seconds", type=int, default=settings.worker_tick_seconds)
+    sub.add_parser("maintenance", help="run one housekeeping sweep now")
     args = parser.parse_args()
 
     if args.command == "seed":
@@ -165,6 +175,8 @@ def main() -> None:
         asyncio.run(_cluster_backfill(args.limit))
     elif args.command == "worker":
         asyncio.run(_worker(args.tick_seconds))
+    elif args.command == "maintenance":
+        asyncio.run(_maintenance())
 
 
 if __name__ == "__main__":

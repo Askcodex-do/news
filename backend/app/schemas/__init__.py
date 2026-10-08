@@ -176,6 +176,65 @@ class IngestionStatsOut(BaseModel):
     generated_at: datetime
 
 
+class SourceHealthSummaryOut(BaseModel):
+    total: int
+    enabled: int
+    healthy: int
+    degraded: int
+    down: int
+    unknown: int
+    offline: list[str]
+
+
+class IngestionSummaryOut(BaseModel):
+    reports_total: int
+    reports_last_hour: int
+    reports_last_24h: int
+    duplicates_total: int
+    failed_reports_total: int
+
+
+class EventSummaryOut(BaseModel):
+    total: int
+    by_status: dict[str, int]
+    created_last_24h: int
+    merged_reports_total: int
+
+
+class JobSummaryOut(BaseModel):
+    queue: dict[str, int]
+    dead_total: int
+    failures_last_hour: int
+    max_attempts_seen: int
+
+
+class OpsMetricsOut(BaseModel):
+    """Operational snapshot (spec section 33)."""
+
+    generated_at: datetime
+    sources: SourceHealthSummaryOut
+    ingestion: IngestionSummaryOut
+    events: EventSummaryOut
+    jobs: JobSummaryOut
+    scheduler: dict | None
+    articles_published: int
+
+
+class AccuracyMetricsOut(BaseModel):
+    """Accuracy dashboard (spec section 33)."""
+
+    generated_at: datetime
+    articles_published: int
+    articles_published_24h: int
+    fact_validation_failures: int
+    corrections: int
+    source_conflicts_open: int
+    low_confidence_publications: int
+    duplicate_publications: int
+    rejection_rate: float
+    confidence_floor: float
+
+
 class EventFactOut(BaseModel):
     """A verified fact with its source support (spec section 10)."""
 

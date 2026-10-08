@@ -117,6 +117,19 @@ class Settings(BaseSettings):
     # CIDR -> country JSON map for the "static" dev/test provider.
     geoip_static_map: str = ""
 
+    # Continuous operation (spec section 25)
+    # Seconds between a worker's scheduling scan and its execution ticks.
+    worker_tick_seconds: int = 10
+    scheduler_interval_seconds: int = 60
+    # How long a worker's scheduling lease is valid before another may take over.
+    scheduler_lease_seconds: int = 300
+    # A developing event with no new reports for this long is archived.
+    stale_event_hours: int = 168
+    # SUCCEEDED jobs older than this are pruned; dead jobs are kept for diagnosis.
+    job_retention_days: int = 7
+    # How often the maintenance sweep runs, in seconds.
+    maintenance_interval_seconds: int = 900
+
     # Cost controls
     ai_max_requests_per_hour: int = 500
     ai_max_tokens_per_article: int = 4000

@@ -78,8 +78,9 @@ services:
       context: .
       dockerfile: infrastructure/docker/backend.Dockerfile
     environment: *backend-env
-    # Phase 2: the ingestion worker runs the continuous scheduling + execution
-    # loop. Later phases add clustering, verification and article workers.
+    # Phase 7: the worker runs the continuous scheduling + execution loop. Scale
+    # with `--scale worker=N`: the scheduler lease keeps exactly one replica
+    # scheduling while all of them execute jobs (spec section 25).
     command: ["python", "-m", "app.cli", "worker"]
     # No HTTP server, so the image's API healthcheck does not apply.
     healthcheck:

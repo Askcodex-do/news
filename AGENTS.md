@@ -113,6 +113,27 @@ docker compose logs -f backend worker
 - `python -m app.cli cluster-backfill` clusters reports that were ingested before
   Phase 3 existed, so an upgrade does not wait for the next poll cycle.
 
+## Continuous operation (Phase 7)
+
+- The worker loop (`app/services/worker_loop.py`) runs every stage: recover
+  stale locks → execute jobs → (leased) schedule due sources → housekeeping.
+  `run_ingestion_loop` returns immediately when `stop` is set, so shutdown
+  never opens a session.
+- Scheduling is **single-flight**: `scheduler_state` (migration `8d2b6f0a1c34`)
+  is a one-row lease. `queue.acquire_scheduler_lease` is one atomic
+  `INSERT ... ON CONFLICT DO UPDATE ... WHERE locked_at IS NULL OR < cutoff`,
+  so exactly one worker wins per tick. Losing the race is normal, not an error.
+  Scale replicas with `docker compose up --scale worker=N`.
+- Observability lives in `app/services/observability.py`: `ops_snapshot`
+  (`GET /admin/metrics`) and `accuracy_snapshot` (`GET /admin/accuracy`, spec
+  §33). Both are read-only COUNT/GROUP BY aggregations.
+- Housekeeping (`app/services/maintenance.py`, `python -m app.cli maintenance`):
+  archives active events quiet for `STALE_EVENT_HOURS`; prunes SUCCEEDED jobs
+  past `JOB_RETENTION_DAYS`. DEAD jobs are deliberately kept for diagnosis.
+- New settings: `WORKER_TICK_SECONDS`, `SCHEDULER_INTERVAL_SECONDS`,
+  `SCHEDULER_LEASE_SECONDS`, `STALE_EVENT_HOURS`, `JOB_RETENTION_DAYS`,
+  `MAINTENANCE_INTERVAL_SECONDS`.
+
 ## Testing conventions
 
 - Real code paths only; avoid mocks. Integration and ingestion tests hit a real
@@ -126,6 +147,14 @@ docker compose logs -f backend worker
   `asyncio_default_test_loop_scope` to `session`. Keep them in sync: the shared
   engine is created at import time, so mixing module-scoped async fixtures with
   function-scoped loops causes "attached to a different loop" errors.
+- Shared DB factories (`make_source`, `make_report`) and cleaners (`clean_events`,
+  `clean_articles`) live in `tests/conftest.py`. `clean_events` deletes articles
+  first: `articles.event_id → events.id` is a FK, so deleting events first trips
+  it. `make_source` deletes `source_health` before `sources` for the same reason.
+- API tests read the admin token from `settings.admin_api_token`, not a literal:
+  the test environment exports `ADMIN_API_TOKEN`, and `.env` may differ.
+- Tests must not depend on ambient env. If a unit test asserts a provider
+  default, pin the setting with `monkeypatch.setattr(settings, ...)`.
 
 ## Security
 

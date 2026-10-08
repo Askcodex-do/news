@@ -22,12 +22,14 @@ from app.models.job import ProcessingJob
 from app.models.source import Source, SourceHealth
 from app.models.source_report import SourceReport
 from app.schemas import (
+    AccuracyMetricsOut,
     EventConflictOut,
     EventDetailOut,
     EventFactOut,
     EventIntelligenceStatsOut,
     IngestionStatsOut,
     JobOut,
+    OpsMetricsOut,
     SourceHealthRow,
 )
 from app.services import queue
@@ -41,6 +43,8 @@ from app.services.images import (
     purge_expired_image_references,
 )
 from app.services.ingestion import ingest_source
+from app.services.maintenance import run_maintenance
+from app.services.observability import accuracy_snapshot, ops_snapshot
 from app.services.queue import JobType
 from app.services.scheduler import enqueue_due_sources
 from app.services.verification import verify_event
@@ -159,6 +163,29 @@ async def ingestion_stats(session: AsyncSession = Depends(get_session)) -> Inges
         queue=await queue.queue_depth(session),
         generated_at=now,
     )
+
+
+@router.get("/metrics", response_model=OpsMetricsOut)
+async def metrics(session: AsyncSession = Depends(get_session)) -> OpsMetricsOut:
+    """Operational snapshot for a dashboard (spec section 33)."""
+    return OpsMetricsOut.model_validate((await ops_snapshot(session)).as_dict())
+
+
+@router.get("/accuracy", response_model=AccuracyMetricsOut)
+async def accuracy(session: AsyncSession = Depends(get_session)) -> AccuracyMetricsOut:
+    """Accuracy dashboard (spec section 33).
+
+    Tracks what the spec calls out explicitly: published articles, fact
+    validation failures, corrections, source conflicts and low-confidence
+    publications.
+    """
+    return AccuracyMetricsOut.model_validate((await accuracy_snapshot(session)).as_dict())
+
+
+@router.post("/maintenance/run")
+async def maintenance_run(session: AsyncSession = Depends(get_session)) -> dict:
+    """Run the housekeeping sweeps now (spec sections 22, 25)."""
+    return (await run_maintenance(session)).as_dict()
 
 
 @router.get("/events", response_model=list[EventDetailOut])

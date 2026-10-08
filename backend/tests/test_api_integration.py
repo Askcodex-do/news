@@ -10,6 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.services.seeding import seed
@@ -53,7 +54,7 @@ async def test_source_detail_and_health_requires_admin(client):
 
     assert (await client.get("/sources/indiatoday/health")).status_code == 401
     authorized = await client.get(
-        "/sources/indiatoday/health", headers={"X-Admin-Token": "dev-admin-token"}
+        "/sources/indiatoday/health", headers={"X-Admin-Token": settings.admin_api_token}
     )
     assert authorized.status_code == 200
     assert authorized.json()["status"] in {"unknown", "healthy", "degraded", "down"}

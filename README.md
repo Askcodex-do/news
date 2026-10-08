@@ -22,7 +22,7 @@ This repository is being built in phases (see the task specification).
 | 4 | AI editorial system: importance, generation, fact validation, attribution, versions | **implemented** |
 | 5 | Localization: IP → country, country → configured source, local/global ranking, 20 + 20 feeds | **implemented** |
 | 6 | Images: generation with transient handling, no permanent storage | **implemented** |
-| 7 | Continuous operation: queues, retries, scheduling, monitoring, 24/7 workers | partial (queue + worker loop) |
+| 7 | Continuous operation: queues, retries, scheduling, monitoring, 24/7 workers | **implemented** |
 | 8 | Production hardening: security, load/accuracy/duplicate testing, DR, backups, cost controls | planned |
 
 What Phase 1 delivers today:
@@ -135,6 +135,28 @@ What Phase 6 adds:
   lingers.
 - Article detail exposes image metadata only, and
   `POST /admin/articles/{id}/image` generates or reuses a reference on demand.
+
+What Phase 7 adds:
+
+- Single-flight scheduling (spec section 25): `scheduler_state` is a one-row
+  lease, so exactly one worker scans for due sources per tick while every
+  replica executes jobs. A dead holder's lease ages out and another worker takes
+  over; losing the race just skips a scheduling pass. Scale workers with
+  `docker compose up --scale worker=3`.
+- Observability endpoints (spec section 33): `GET /admin/metrics` returns an
+  operational snapshot (sources online/offline, ingestion/hour, event counts,
+  queue depth and job outcomes, last scheduling run), and
+  `GET /admin/accuracy` is the accuracy dashboard — published articles, fact
+  validation failures, corrections (versions beyond the first), open source
+  conflicts and low-confidence publications.
+- Housekeeping (spec sections 22, 25): the worker periodically archives active
+  events with no new reports for `STALE_EVENT_HOURS` and prunes SUCCEEDED jobs
+  past `JOB_RETENTION_DAYS`. Dead jobs are kept for diagnosis.
+  `python -m app.cli maintenance` runs a sweep by hand; `POST
+  /admin/maintenance/run` does the same over HTTP.
+- Failure recovery already in place from Phase 2 is unchanged: stale locks are
+  returned to PENDING, retries use exponential backoff, and one bad source or
+  job never stalls the loop.
 
 ## Quick start (Docker Compose)
 

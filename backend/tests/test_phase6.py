@@ -51,9 +51,12 @@ def test_prompt_falls_back_when_fields_missing():
 # --- provider selection ------------------------------------------------------
 
 
-def test_factory_none_provider_by_default():
+def test_factory_none_provider_by_default(monkeypatch):
     from app.services.images import _build_provider
 
+    # Pin the setting rather than relying on ambient env, so the test is
+    # deterministic even when a developer has IMAGE_PROVIDER exported.
+    monkeypatch.setattr(settings, "image_provider", "", raising=False)
     assert isinstance(_build_provider(), NullImageProvider)
 
 

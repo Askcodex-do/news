@@ -8,10 +8,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -20,12 +22,34 @@ from app.db.base import Base, TimestampMixin, UUIDMixin
 
 
 class Article(Base, UUIDMixin, TimestampMixin):
-    """An original, AI-synthesized article for one event."""
+    """An original, AI-synthesized article for one event.
+
+    One event may have a global version plus one localized version per country
+    (spec section 18). The partial unique indexes below allow that while still
+    preventing duplicate global articles or duplicate versions for the same
+    locale. A developing story keeps one article per locale and appends
+    versions (spec section 22).
+    """
 
     __tablename__ = "articles"
+    __table_args__ = (
+        Index(
+            "uq_articles_event_global",
+            "event_id",
+            unique=True,
+            postgresql_where=text("is_global"),
+        ),
+        Index(
+            "uq_articles_event_locale",
+            "event_id",
+            "locale_country",
+            unique=True,
+            postgresql_where=text("NOT is_global"),
+        ),
+    )
 
     event_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("events.id"), unique=True, nullable=False
+        PG_UUID(as_uuid=True), ForeignKey("events.id"), nullable=False
     )
     # Locale/country of this editorial version (spec section 18).
     locale_country: Mapped[str | None] = mapped_column(String(2), index=True)

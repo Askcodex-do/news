@@ -28,9 +28,9 @@ const BACKEND =
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   "http://localhost:8000";
 
-async function getJson<T>(path: string): Promise<T | null> {
+async function getJson<T>(path: string, headers?: Record<string, string>): Promise<T | null> {
   try {
-    const res = await fetch(`${BACKEND}${path}`, { cache: "no-store" });
+    const res = await fetch(`${BACKEND}${path}`, { cache: "no-store", headers });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -38,7 +38,17 @@ async function getJson<T>(path: string): Promise<T | null> {
   }
 }
 
-export async function getFeed(country?: string): Promise<FeedResponse | null> {
+/**
+ * Fetch the ranked feed. `forwardedFor` carries the visitor IP to the backend,
+ * which uses it only to resolve a country for the local edition (spec §5). The
+ * backend ignores it unless it is explicitly configured behind a trusted proxy,
+ * and never stores the address.
+ */
+export async function getFeed(
+  country?: string,
+  forwardedFor?: string,
+): Promise<FeedResponse | null> {
   const query = country ? `?country=${encodeURIComponent(country)}` : "";
-  return getJson<FeedResponse>(`/feed${query}`);
+  const headers = forwardedFor ? { "X-Forwarded-For": forwardedFor } : undefined;
+  return getJson<FeedResponse>(`/feed${query}`, headers);
 }

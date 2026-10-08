@@ -7,10 +7,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.deps import set_geoip_provider
 from app.api.middleware import RateLimitMiddleware
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
+from app.services.geoip import build_geoip_provider
 
 logger = get_logger(__name__)
 
@@ -19,7 +21,13 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     configure_logging()
     logger.info("starting news-ai backend (env=%s)", settings.app_env)
-    # Phase 5 wires a real GeoIP provider here; Phase 1 uses the null provider.
+    provider = build_geoip_provider(
+        settings.geoip_provider,
+        database_path=settings.geoip_database_path,
+        static_map=settings.geoip_static_map,
+    )
+    set_geoip_provider(provider)
+    logger.info("geolocation backend: %s", type(provider).__name__)
     yield
     logger.info("shutting down news-ai backend")
 

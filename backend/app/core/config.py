@@ -93,6 +93,22 @@ class Settings(BaseSettings):
     # Re-run the AI fact-check pass on every draft (spec section 28, layer 5).
     ai_fact_check_enabled: bool = True
 
+    # Localization / feed (spec sections 5, 18, 21)
+    # Max stories per feed. The primary feed shows at most 20 + 20 (section 21).
+    feed_limit: int = 20
+    # Recency half-life for ranking; an article's recency term halves every
+    # this many hours. Importance dominates, recency only breaks ties.
+    rank_recency_half_life_hours: float = 18.0
+    # Multiplier applied to local-feed candidates so a country's own coverage
+    # rises slightly. Kept small so it cannot outrank a major global story.
+    local_relevance_bonus: float = 1.10
+    # GeoIP backend: "null" (global only), "static" (test/dev CIDR map) or
+    # "maxmind" (a GeoLite2 database path in GEOIP_DATABASE_PATH).
+    geoip_provider: str = "null"
+    geoip_database_path: str = ""
+    # CIDR -> country JSON map for the "static" dev/test provider.
+    geoip_static_map: str = ""
+
     # Cost controls
     ai_max_requests_per_hour: int = 500
     ai_max_tokens_per_article: int = 4000

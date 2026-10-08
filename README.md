@@ -19,8 +19,8 @@ This repository is being built in phases (see the task specification).
 | 1 | Foundation: repo, Docker, PostgreSQL, FastAPI, Next.js, migrations, config, tests | **implemented** |
 | 2 | News ingestion: source management, RSS/API ingestion, normalization, URL dedup, hashing, source health | **implemented** |
 | 3 | Event intelligence: semantic dedup, clustering, fact extraction, source independence, confidence | **implemented** |
-| 4 | AI editorial system: importance, generation, fact validation, attribution, versions | planned |
-| 5 | Localization: IP → country, country → configured source, local/global ranking, 20 + 20 feeds | partial (geo + feed scaffold) |
+| 4 | AI editorial system: importance, generation, fact validation, attribution, versions | **implemented** |
+| 5 | Localization: IP → country, country → configured source, local/global ranking, 20 + 20 feeds | **implemented** |
 | 6 | Images: generation with transient handling, no permanent storage | planned |
 | 7 | Continuous operation: queues, retries, scheduling, monitoring, 24/7 workers | partial (queue + worker loop) |
 | 8 | Production hardening: security, load/accuracy/duplicate testing, DR, backups, cost controls | planned |
@@ -77,6 +77,44 @@ What Phase 3 adds:
   and `POST /admin/events/{id}/verify` for operator review.
 - `python -m app.cli cluster-backfill` clusters reports ingested before Phase 3
   so an upgrade does not wait for the next poll cycle.
+
+What Phase 4 adds:
+
+- Importance scoring (`app/services/importance.py`), kept separate from
+  confidence: a confirmed trivial event is not news, and a huge developing
+  event still needs verification.
+- An AI writer abstraction (`app/services/ai.py`): an OpenAI writer for
+  production and a deterministic, offline writer for tests and local dev.
+- A structured evidence package (`app/services/evidence.py`): the writer only
+  ever receives facts deterministic verification already attributed, split into
+  confirmed vs single-source support, plus conflicts and source links.
+- A deterministic publish gate (`app/services/article_validation.py`) that
+  rejects a draft with unsupported numbers, fabricated names or URLs, duplicated
+  paragraphs or verbatim source copying, followed by an AI fact-check pass.
+- Article generation (`app/services/article_generation.py`): one article per
+  event, versioned, with transparent source attribution. A developing story
+  keeps one article and appends versions rather than publishing a new story.
+- Admin endpoints `POST /admin/events/{id}/generate` and
+  `GET /admin/articles/rejected` (the accuracy dashboard's do-not-publish queue).
+
+What Phase 5 adds:
+
+- Geolocation (`app/services/geoip.py`): IP → ISO country with a pluggable
+  backend (`null`, `static`, `maxmind`), selected from configuration and wired
+  at startup. The visitor IP is used only to resolve a country and is never
+  stored; an unresolved IP or unknown country falls back to the global edition
+  and never blocks the site.
+- Country → local source (`config/country_sources.yaml`, `country_sources`
+  table): the mapping is data, never an LLM prompt.
+- Feed ranking (`app/services/ranking.py`): a transparent, bounded blend of
+  importance, confidence and recency — explicitly not an engagement score — that
+  produces a ranked global top-20 and local top-20.
+- Localized editions (`generate_localized_articles`): an event can carry a
+  global article plus one country-angle edition per locale, each written from
+  the same verified evidence so localization re-angles facts without inventing
+  local impact.
+- `GET /feed` now serves the ranked global + local feed, and the Next.js page
+  forwards the visitor IP so the local column matches their country.
 
 ## Quick start (Docker Compose)
 

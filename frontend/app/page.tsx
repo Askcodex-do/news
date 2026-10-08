@@ -1,3 +1,5 @@
+import { headers } from "next/headers";
+
 import StoryCard from "@/components/StoryCard";
 import { getFeed } from "@/lib/api";
 import type { ArticleCard } from "@/lib/api";
@@ -16,9 +18,11 @@ function Column({ title, articles, empty }: { title: string; articles: ArticleCa
 }
 
 export default async function HomePage() {
-  // Phase 1: no IP geolocation yet, so the page renders the global edition.
-  // Phase 5 wires the visitor's country through to the local column.
-  const feed = await getFeed();
+  // Forward the visitor's IP to the backend, which resolves it to a country and
+  // serves the matching local edition (spec §5, §21). On failure the backend
+  // returns the global edition; the page is never blocked.
+  const forwardedFor = headers().get("x-forwarded-for") ?? undefined;
+  const feed = await getFeed(undefined, forwardedFor);
 
   const globalArticles = feed?.global_articles ?? [];
   const localArticles = feed?.local_articles ?? [];

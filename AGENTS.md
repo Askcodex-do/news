@@ -12,16 +12,17 @@ Non-negotiable product rule: **accuracy outranks speed, volume, SEO and
 engagement.** "Not enough verified information to publish" is a valid outcome
 and must be implemented as a product behavior, not just an AI prompt.
 
-The spec is delivered in phases. Phases 1 (foundation), 2 (news ingestion) and
-3 (event intelligence: clustering, verification, confidence) are complete; see
-`README.md` for the phase table.
+The spec is delivered in phases. Phases 1 (foundation), 2 (news ingestion),
+3 (event intelligence: clustering, verification, confidence), 4 (AI editorial
+system) and 5 (localization: IP→country→local source, ranking, 20+20 feeds) are
+complete; see `README.md` for the phase table.
 
 ## Commands
 
 ```bash
 # Backend
 cd backend && . .venv/bin/activate
-pytest                       # 124 tests; DB tests use isolated news_test
+pytest                       # 144 tests; DB tests use isolated news_test
 ruff check app tests
 ruff format app tests
 alembic upgrade head         # run from backend/

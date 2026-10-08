@@ -31,7 +31,10 @@ from app.schemas import (
     SourceHealthRow,
 )
 from app.services import queue
-from app.services.article_generation import generate_article_for_event
+from app.services.article_generation import (
+    generate_article_for_event,
+    generate_localized_articles,
+)
 from app.services.ingestion import ingest_source
 from app.services.queue import JobType
 from app.services.scheduler import enqueue_due_sources
@@ -302,6 +305,34 @@ async def generate_article_now(
         "reason": outcome.reason,
         "version": outcome.version,
         "failures": outcome.validation.failures if outcome.validation else [],
+    }
+
+
+@router.post("/events/{event_id}/localize")
+async def localize_event_now(
+    event_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Generate country-angle editions for an event (spec section 18).
+
+    The countries come from the ``country_sources`` mapping, never from an LLM.
+    Each localized edition reuses the same verified evidence, so localization
+    re-angles confirmed facts and cannot introduce local claims.
+    """
+    try:
+        outcomes = await generate_localized_articles(session, event_id, reason="manual")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {
+        "event_id": str(event_id),
+        "localized": {
+            country: {
+                "article_id": str(outcome.article_id) if outcome.article_id else None,
+                "published": outcome.published,
+                "reason": outcome.reason,
+            }
+            for country, outcome in outcomes.items()
+        },
     }
 
 

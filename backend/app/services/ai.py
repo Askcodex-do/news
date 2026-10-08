@@ -58,6 +58,39 @@ category, location, seo_title, seo_description, insufficient_evidence (bool).
 """
 
 
+def _localization_block(audience_country: str | None) -> str:
+    """Prompt addendum for a localized edition (spec section 18).
+
+    Localization may change the *angle*, never the *facts*. The instruction is
+    explicit that a local connection must not be manufactured, because the spec
+    forbids fabricating local impact merely because the reader is in a country.
+    """
+    if not audience_country:
+        return ""
+    return (
+        "\n\nTarget audience: readers in " + audience_country + ".\n"
+        "You MAY frame the story for this audience ONLY using facts already in "
+        "the evidence. Never invent or imply local impact, casualties, "
+        "officials, reaction or relevance that the evidence does not contain. "
+        "If the evidence has no bearing on "
+        + audience_country
+        + ", write the neutral global story; do not manufacture a local "
+        "connection."
+    )
+
+
+def build_article_prompt(
+    evidence: dict[str, Any], audience_country: str | None = None
+) -> tuple[str, str]:
+    """Return the ``(system, user)`` prompts for one article draft."""
+    user = (
+        "Evidence package:\n"
+        + json.dumps(evidence, ensure_ascii=False, sort_keys=True)
+        + "\n\nWrite the original article now."
+    )
+    return _SYSTEM_PROMPT + _localization_block(audience_country), user
+
+
 @dataclass(frozen=True)
 class ArticleDraft:
     """The writer's output, before validation."""
@@ -158,13 +191,9 @@ class OpenAIProvider(AIProvider):
     async def draft_article(
         self, *, evidence: dict[str, Any], audience_country: str | None = None
     ) -> ArticleDraft:
-        user = (
-            "Evidence package:\n"
-            + json.dumps(evidence, ensure_ascii=False, sort_keys=True)
-            + "\n\nWrite the original article now."
-        )
+        system, user = build_article_prompt(evidence, audience_country)
         content, usage = await self._chat(
-            _SYSTEM_PROMPT, user, max_tokens=settings.ai_max_tokens_per_article
+            system, user, max_tokens=settings.ai_max_tokens_per_article
         )
         data = _extract_json(content)
         timeline = data.get("timeline")

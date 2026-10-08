@@ -27,7 +27,10 @@ from app.models.enums import EventStatus
 from app.models.job import ProcessingJob
 from app.models.source import Source
 from app.services import queue
-from app.services.article_generation import generate_article_for_event
+from app.services.article_generation import (
+    generate_article_for_event,
+    generate_localized_articles,
+)
 from app.services.clustering import cluster_report
 from app.services.ingestion import IngestStats, ingest_source
 from app.services.queue import JobType
@@ -187,7 +190,16 @@ async def _run_generate_job(session: AsyncSession, job_payload: str | None) -> s
     payload = json.loads(job_payload) if job_payload else {}
     event_id = uuid.UUID(payload["event_id"])
     outcome = await generate_article_for_event(session, event_id)
-    return f"event {event_id} published={outcome.published} ({outcome.reason})"
+    # Once the global article exists, produce the country-angle editions the
+    # configured mapping calls for (spec section 18). Localization is additive:
+    # a localized draft that fails validation is simply skipped, never published.
+    localized: dict[str, bool] = {}
+    if outcome.published:
+        for country, result in (await generate_localized_articles(session, event_id)).items():
+            localized[country] = result.published
+    return (
+        f"event {event_id} published={outcome.published} ({outcome.reason}) localized={localized}"
+    )
 
 
 async def process_pending_jobs(session: AsyncSession, *, worker: str, max_jobs: int = 25) -> int:

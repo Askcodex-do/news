@@ -29,9 +29,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.article import Article, ArticleImage, ArticleSource, ArticleVersion
+from app.models.country import Country
 from app.models.enums import EventStatus
 from app.models.event import Event, EventFact, EventReport
-from app.models.source import Source
+from app.models.source import CountrySource, Source
 from app.models.source_report import SourceReport
 from app.services.ai import ai_provider_configured, get_ai_provider
 from app.services.article_validation import ValidationResult, validate_draft
@@ -74,6 +75,19 @@ async def _unique_slug(
             return slug
         slug = f"{base}-{suffix}"
         suffix += 1
+
+
+def _article_stmt(event_id: uuid.UUID, audience_country: str | None):
+    """The one article row for an event *in a given locale* (spec section 18).
+
+    ``audience_country=None`` selects the global article; otherwise the
+    localized edition for that country. This is what lets an event carry a
+    global version plus one version per locale without duplicating the story.
+    """
+    stmt = select(Article).where(Article.event_id == event_id)
+    if audience_country is None:
+        return stmt.where(Article.is_global.is_(True))
+    return stmt.where(Article.is_global.is_(False), Article.locale_country == audience_country)
 
 
 async def _source_texts(session: AsyncSession, event_id: uuid.UUID) -> list[str]:
@@ -307,7 +321,7 @@ async def generate_article_for_event(
         )
 
     article = (
-        await session.execute(select(Article).where(Article.event_id == event.id))
+        await session.execute(_article_stmt(event.id, audience_country))
     ).scalar_one_or_none()
     created = article is None
     if article is None:
@@ -383,6 +397,57 @@ async def generate_article_for_event(
         version=article.current_version,
         validation=validation,
     )
+
+
+async def _localized_countries(session: AsyncSession, event_id: uuid.UUID) -> list[str]:
+    """Countries a supported audience should get a localized edition for.
+
+    Bounded on purpose: localize for the country the event is about when that
+    country is supported, otherwise for the countries whose *configured local
+    source* reported it (spec section 4). No LLM picks the country or the
+    source; both come from the ``country_sources`` data. The local feed still
+    shows an event about a country through the global article, so this only adds
+    the country-angle edition rather than gating local coverage on it.
+    """
+    event = await session.get(Event, event_id)
+    if event is None:
+        return []
+
+    candidate = await session.get(Country, event.country) if event.country else None
+    if candidate is not None and candidate.is_supported:
+        return [event.country]
+
+    rows = (
+        await session.execute(
+            select(CountrySource.country_code)
+            .join(SourceReport, SourceReport.source_id == CountrySource.source_id)
+            .where(
+                CountrySource.enabled.is_(True),
+                SourceReport.id.in_(
+                    select(EventReport.source_report_id).where(EventReport.event_id == event_id)
+                ),
+            )
+            .distinct()
+        )
+    ).scalars()
+    return sorted(rows.all())
+
+
+async def generate_localized_articles(
+    session: AsyncSession, event_id: uuid.UUID, *, reason: str = "localized"
+) -> dict[str, GenerationOutcome]:
+    """Generate a localized edition of an event for each relevant country.
+
+    Each locale reuses the same verified evidence package (spec section 10), so
+    the localized writer can only re-angle facts that were already confirmed —
+    it cannot introduce local claims the evidence does not support.
+    """
+    outcomes: dict[str, GenerationOutcome] = {}
+    for country in await _localized_countries(session, event_id):
+        outcomes[country] = await generate_article_for_event(
+            session, event_id, audience_country=country, reason=reason
+        )
+    return outcomes
 
 
 async def record_image_reference(

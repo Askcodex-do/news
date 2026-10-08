@@ -130,13 +130,70 @@ class Settings(BaseSettings):
     # How often the maintenance sweep runs, in seconds.
     maintenance_interval_seconds: int = 900
 
-    # Cost controls
+    # Cost controls (spec section 33/34)
     ai_max_requests_per_hour: int = 500
     ai_max_tokens_per_article: int = 4000
+    # Whether the hourly AI budget is enforced (0 disables the cap).
+    ai_budget_enabled: bool = True
+
+    # Rate limiting (spec section 34)
+    rate_limit_enabled: bool = True
+    rate_limit_requests_per_minute: int = 120
+    # Admin/ops endpoints are stricter than public reads.
+    rate_limit_admin_requests_per_minute: int = 30
+    rate_limit_window_seconds: int = 60
+    # Share one counter across replicas via Redis. Off => per-process limiter.
+    rate_limit_redis_enabled: bool = False
+    # Trust X-Forwarded-For for the client address used to key the limiter and
+    # to resolve a country. Only enable behind a proxy you control.
+    # (shares TRUST_PROXY_HEADERS above)
+
+    # Outbound fetch hardening (spec section 34: validate all external URLs)
+    # Refuse to fetch feeds that resolve to private/loopback/link-local hosts,
+    # so a misconfigured source cannot be used for SSRF.
+    block_private_fetch_hosts: bool = True
+
+    # Security headers (spec section 34)
+    # HSTS is only meaningful over HTTPS; off by default for local HTTP dev.
+    enable_hsts: bool = False
+    hsts_max_age_seconds: int = 31536000
+    content_security_policy: str = (
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    )
+
+    # Backups / disaster recovery (spec section 36)
+    backup_dir: str = "backups"
+    backup_retention_days: int = 14
+
+    # Fail startup on a production misconfiguration instead of only logging it.
+    strict_config: bool = False
 
     @property
     def is_production(self) -> bool:
         return self.app_env.lower() in {"production", "prod"}
+
+    def production_problems(self) -> list[str]:
+        """Return misconfigurations that must not ship to production.
+
+        Called at startup; a non-empty list is logged (and, when
+        ``STRICT_CONFIG`` is on, fatal). This makes "keep API keys in
+        environment variables, never expose them" a checked property rather
+        than a convention (spec section 34).
+        """
+        problems: list[str] = []
+        if not self.is_production:
+            return problems
+        weak_tokens = {"change-me", "testadmin", "dev-admin-token"}
+        if not self.admin_api_token or self.admin_api_token in weak_tokens:
+            problems.append("ADMIN_API_TOKEN is unset or a well-known default")
+        if "change-me" in self.database_url:
+            problems.append("DATABASE_URL still contains the default password")
+        if not self.trust_proxy_headers:
+            problems.append(
+                "TRUST_PROXY_HEADERS is false; visitor country resolution will use "
+                "the proxy address instead of the client"
+            )
+        return problems
 
     @property
     def sync_database_url(self) -> str:

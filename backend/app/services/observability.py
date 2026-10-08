@@ -28,6 +28,7 @@ from app.models.job import ProcessingJob
 from app.models.source import Source, SourceHealth
 from app.models.source_report import SourceReport
 from app.services import queue
+from app.services.cost_control import budget_snapshot
 
 
 @dataclass
@@ -67,6 +68,14 @@ class JobSummary:
 
 
 @dataclass
+class CostSummary:
+    ai_calls_used_this_hour: int = 0
+    ai_calls_limit_per_hour: int = 0
+    ai_budget_remaining: int = 0
+    ai_budget_exhausted: bool = False
+
+
+@dataclass
 class OpsSnapshot:
     generated_at: datetime
     sources: SourceHealthSummary
@@ -75,6 +84,7 @@ class OpsSnapshot:
     jobs: JobSummary
     scheduler: dict | None
     articles_published: int = 0
+    cost: CostSummary = field(default_factory=CostSummary)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -187,6 +197,14 @@ async def ops_snapshot(session: AsyncSession, *, now: datetime | None = None) ->
         ),
     )
 
+    budget = await budget_snapshot()
+    cost = CostSummary(
+        ai_calls_used_this_hour=budget.used,
+        ai_calls_limit_per_hour=budget.limit,
+        ai_budget_remaining=budget.remaining,
+        ai_budget_exhausted=not budget.allowed,
+    )
+
     return OpsSnapshot(
         generated_at=now,
         sources=sources,
@@ -195,6 +213,7 @@ async def ops_snapshot(session: AsyncSession, *, now: datetime | None = None) ->
         jobs=jobs,
         scheduler=await queue.scheduler_status(session),
         articles_published=await _scalar_count(session, Article, Article.is_published.is_(True)),
+        cost=cost,
     )
 
 

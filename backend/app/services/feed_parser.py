@@ -21,6 +21,7 @@ from dateutil import parser as date_parser
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.textnorm import canonicalize_url
+from app.services.url_safety import validate_outbound_url
 
 logger = get_logger(__name__)
 
@@ -93,10 +94,9 @@ def parse_feed_bytes(raw: bytes) -> list[ParsedEntry]:
 
 
 async def fetch_feed(url: str) -> bytes:
-    """Fetch a feed, enforcing scheme and size limits. Raises on failure."""
-    parts = httpx.URL(url)
-    if parts.scheme not in ("http", "https"):
-        raise ValueError(f"refusing to fetch non-http(s) URL: {url}")
+    """Fetch a feed, enforcing scheme, host and size limits. Raises on failure."""
+    # Scheme + SSRF guard (spec section 34). Raises UnsafeURL (a ValueError).
+    validate_outbound_url(url)
 
     async with httpx.AsyncClient(
         timeout=FETCH_TIMEOUT,

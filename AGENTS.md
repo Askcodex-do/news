@@ -14,16 +14,18 @@ and must be implemented as a product behavior, not just an AI prompt.
 
 The spec is delivered in phases. Phases 1 (foundation), 2 (news ingestion),
 3 (event intelligence: clustering, verification, confidence), 4 (AI editorial
-system), 5 (localization: IP→country→local source, ranking, 20+20 feeds) and
-6 (images: transient generation, no permanent storage) are complete; see
-`README.md` for the phase table.
+system), 5 (localization: IP→country→local source, ranking, 20+20 feeds),
+6 (images: transient generation, no permanent storage), 7 (continuous 24/7
+operation: queue, lease, monitoring, maintenance) and 8 (production hardening:
+security, rate limiting, SSRF guard, cost controls, backups/DR, load testing)
+are complete; see `README.md` for the phase table.
 
 ## Commands
 
 ```bash
 # Backend
 cd backend && . .venv/bin/activate
-pytest                       # 162 tests; DB tests use isolated news_test
+pytest                       # 222 tests; DB tests use isolated news_test
 ruff check app tests
 ruff format app tests
 alembic upgrade head         # run from backend/

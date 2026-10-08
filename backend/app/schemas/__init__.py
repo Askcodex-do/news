@@ -208,6 +208,15 @@ class JobSummaryOut(BaseModel):
     max_attempts_seen: int
 
 
+class CostSummaryOut(BaseModel):
+    """AI spend guard state (spec sections 33-34)."""
+
+    ai_calls_used_this_hour: int
+    ai_calls_limit_per_hour: int
+    ai_budget_remaining: int
+    ai_budget_exhausted: bool
+
+
 class OpsMetricsOut(BaseModel):
     """Operational snapshot (spec section 33)."""
 
@@ -218,6 +227,7 @@ class OpsMetricsOut(BaseModel):
     jobs: JobSummaryOut
     scheduler: dict | None
     articles_published: int
+    cost: CostSummaryOut
 
 
 class AccuracyMetricsOut(BaseModel):

@@ -23,7 +23,7 @@ This repository is being built in phases (see the task specification).
 | 5 | Localization: IP → country, country → configured source, local/global ranking, 20 + 20 feeds | **implemented** |
 | 6 | Images: generation with transient handling, no permanent storage | **implemented** |
 | 7 | Continuous operation: queues, retries, scheduling, monitoring, 24/7 workers | **implemented** |
-| 8 | Production hardening: security, load/accuracy/duplicate testing, DR, backups, cost controls | planned |
+| 8 | Production hardening: security, load/accuracy/duplicate testing, DR, backups, cost controls | **implemented** |
 
 What Phase 1 delivers today:
 
@@ -212,6 +212,23 @@ ruff check app tests
 Integration and ingestion tests skip automatically when the test database is
 missing or unmigrated, so the unit suite is safe to run anywhere.
 
+The Phase 8 suites cover hardening and accuracy:
+
+- `tests/test_phase8.py` — SSRF guard, rate-limit stores/middleware, AI cost
+  guard, production config guard, security logging.
+- `tests/test_phase8_db.py` — a synthetic "one event, many sources" corpus that
+  must collapse to one event and one article with the independent-chain count
+  (not the website count), plus a set of fabricated drafts that must all be
+  rejected.
+
+Load testing runs against a live server (start the API first):
+
+```bash
+cd backend && . .venv/bin/activate
+python tests/load/loadtest.py --base-url http://localhost:8000 \
+  --users 50 --duration 30 --max-p95-ms 400 --max-error-rate 0.01
+```
+
 ### Running the ingestion worker
 
 ```bash
@@ -283,5 +300,14 @@ safeguards that make this different from "scrape → rewrite → publish".
 - Ingestion only fetches configured `http(s)` URLs, strips HTML from feed
   content, and rejects non-`http(s)` links; `raw_text_permitted` gates whether
   publisher full text is stored at all.
-- Admin/ops endpoints are token-protected and rate limiting is planned for
-  Phase 8.
+- Outbound fetches pass an SSRF guard (`app/services/url_safety.py`): only
+  `http(s)` schemes are allowed and private, loopback, link-local and cloud
+  metadata addresses are refused unless explicitly opted out for local dev.
+- Responses carry security headers (`X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, and a strict `Content-Security-Policy`).
+- Read endpoints are rate limited (in-process by default, Redis when configured)
+  and rate-limit decisions are logged as security events without the raw IP.
+- An AI cost budget (`ai_max_requests_per_hour`) defers generation when the
+  hourly allowance is spent, and the spend is exposed on `/admin/metrics`.
+- Startup refuses to run in `production` with default secrets, a weak database
+  password, or untrusted proxy headers (`settings.production_problems()`).

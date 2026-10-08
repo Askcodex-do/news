@@ -36,6 +36,7 @@ from app.models.source import CountrySource, Source
 from app.models.source_report import SourceReport
 from app.services.ai import ai_provider_configured, get_ai_provider
 from app.services.article_validation import ValidationResult, validate_draft
+from app.services.cost_control import reserve_ai_call
 from app.services.evidence import build_evidence_package
 from app.services.importance import ImportanceInputs, score_importance
 from app.services.textnorm import normalize_text
@@ -288,6 +289,19 @@ async def generate_article_for_event(
     evidence = await build_evidence_package(session, event, audience_country=audience_country)
     if not evidence["confirmed_facts"] and not evidence["single_source_facts"]:
         return GenerationOutcome(article_id=None, published=False, reason="no facts to write from")
+
+    # Cost control (spec section 33): reserve against the hourly AI budget before
+    # spending a call. Deferring leaves the event pre-publication so a later
+    # pass retries it once the window resets.
+    budget = await reserve_ai_call()
+    if not budget.allowed:
+        return GenerationOutcome(
+            article_id=None,
+            published=False,
+            reason=(
+                f"AI hourly budget exhausted ({budget.used}/{budget.limit}); deferring generation"
+            ),
+        )
 
     provider = get_ai_provider()
     draft = await provider.draft_article(evidence=evidence, audience_country=audience_country)

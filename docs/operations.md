@@ -185,6 +185,12 @@ drops it — a repeatable DR check rather than a hope. The drill creates and dro
 a database, so run it as an admin/backup role (`POSTGRES_USER`); the app's
 least-privilege role is deliberately refused with a clear message.
 
+Use a `pg_dump`/`pg_restore` client whose major version matches the server
+(pg16 here). A newer client writes settings the older server does not know —
+e.g. a v17 client emits `SET transaction_timeout = 0`, which a pg16 server
+rejects, making the restore appear to fail. Install the matching client from the
+PGDG repositories (`postgresql-client-16`) rather than the distro default.
+
 ### Load testing
 
 `backend/tests/load/loadtest.py` drives the read API with concurrent virtual

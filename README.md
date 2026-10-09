@@ -209,6 +209,12 @@ pytest
 ruff check app tests
 ```
 
+CI (`.github/workflows/ci.yml`) runs this on every pull request: a backend job
+brings up the `pgvector/pg16` and `redis` images, provisions `news_test` with
+the least-privilege role and the `vector`/`pg_trgm` extensions, migrates it,
+then runs `ruff check`, `ruff format --check`, and `pytest`; a second job runs
+`npm ci && npm run build` for the frontend.
+
 Integration and ingestion tests skip automatically when the test database is
 missing or unmigrated, so the unit suite is safe to run anywhere.
 

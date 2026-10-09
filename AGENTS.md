@@ -32,6 +32,11 @@ alembic upgrade head         # run from backend/
 python -m app.cli seed       # config/*.yaml -> database (idempotent)
 python -m app.cli export-seeds
 
+# CI (.github/workflows/ci.yml) runs on every PR: backend job spins up
+# pgvector/pg16 + redis, provisions news_test with the least-privilege role and
+# the vector/pg_trgm extensions, migrates, then runs ruff + pytest; a second job
+# runs `npm ci && npm run build` for the frontend.
+
 # Ingestion (Phase 2)
 python -m app.cli worker             # continuous 24/7 loop
 python -m app.cli ingest-once        # one scheduling + execution pass

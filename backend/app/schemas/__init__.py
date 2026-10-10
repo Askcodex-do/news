@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.models.enums import EventStatus, JobStatus, SourceType
 
@@ -97,6 +98,23 @@ class ArticleDetail(ArticleCard):
     current_version: int
     sources: list[SourceAttribution] = []
     image: ArticleImageOut | None = None
+
+    @field_validator("key_points", "timeline", mode="before")
+    @classmethod
+    def _decode_json_column(cls, value: object) -> object:
+        """Decode ``key_points``/``timeline`` from their JSON-text storage.
+
+        The ``Article`` model stores both as JSON-encoded ``Text``, but the API
+        exposes lists. Without this, ``model_validate`` sees the raw string and
+        raises, 500ing the detail endpoint that renders a published article.
+        """
+        if not isinstance(value, str):
+            return value
+        try:
+            decoded = json.loads(value)
+        except ValueError:
+            return None
+        return decoded if isinstance(decoded, list) else None
 
 
 class FeedResponse(BaseModel):

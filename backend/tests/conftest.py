@@ -208,6 +208,25 @@ async def clean_events(db_session):
 
 
 @pytest.fixture
+async def client(db_session):
+    """An httpx client bound to the real app, backed by the test database.
+
+    Shares ``db_session``'s database, so a test can generate rows through the
+    service layer and then read them back through the HTTP API.
+    """
+    import httpx
+
+    from app.main import app
+
+    if not await database_available():
+        pytest.skip("test database not available (see conftest for setup)")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest.fixture
 async def clean_articles(db_session, clean_events):
     from sqlalchemy import delete
 

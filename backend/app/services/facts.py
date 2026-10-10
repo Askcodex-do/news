@@ -90,8 +90,46 @@ _MEASURE_ALIASES: dict[str, str] = {
     "affected": "affected",
 }
 
-# Number tokens: 6.8, 1,200, 12
-_NUMBER = re.compile(r"\b(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\b")
+# Cardinal number words, so "twelve killed" yields the same claim as "12 killed".
+_NUMBER_WORDS: dict[str, int] = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+    "hundred": 100,
+    "thousand": 1000,
+}
+
+# Number tokens: 6.8, 1,200, 12, or a cardinal word (twelve). The word branch
+# keeps the same surrounding context window, so "twelve killed" resolves to the
+# same "deaths" measure as "12 killed".
+_NUMBER = re.compile(
+    r"\b(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?|" + "|".join(_NUMBER_WORDS) + r")\b",
+    re.IGNORECASE,
+)
 _WORD = re.compile(r"[a-zA-Z]+")
 
 # Numbers that appear as part of a date/time and are not quantities.
@@ -118,10 +156,13 @@ def _extract_numbers(text: str) -> list[ExtractedFact]:
     facts: list[ExtractedFact] = []
     for match in _NUMBER.finditer(text):
         raw = match.group(1)
-        try:
-            value = float(raw.replace(",", ""))
-        except ValueError:
-            continue
+        if raw.casefold() in _NUMBER_WORDS:
+            value = float(_NUMBER_WORDS[raw.casefold()])
+        else:
+            try:
+                value = float(raw.replace(",", ""))
+            except ValueError:
+                continue
 
         # Skip numbers that are really calendar/time references.
         window = text[max(0, match.start() - 4) : match.end() + 4]
@@ -219,6 +260,32 @@ _ENTITY_SUFFIX = re.compile(
     r"Court|Institute|Foundation))\b"
 )
 
+# Common countries and country-level places. A single-word place name (Japan,
+# Chile) is the most discriminating entity in a disaster headline, but the
+# capitalized-run pattern misses it because it is one word. Without this,
+# "earthquake strikes Japan" and "earthquake strikes Chile" share every token
+# and would merge. Kept to widely used English names; region/city resolution is
+# the geocoding layer's job, not this gazetteer's.
+_PLACES = frozenset(
+    """
+    afghanistan albania algeria angola argentina armenia australia austria
+    azerbaijan bahrain bangladesh belarus belgium bolivia bosnia botswana brazil
+    bulgaria cambodia cameroon canada chad chile china colombia congo croatia cuba
+    cyprus czechia denmark ecuador egypt eritrea estonia ethiopia finland france
+    gabon georgia germany ghana greece guatemala guinea haiti honduras hungary
+    iceland india indonesia iran iraq ireland israel italy ivorycoast jamaica japan
+    jordan kazakhstan kenya kuwait kyrgyzstan laos latvia lebanon liberia libya
+    lithuania madagascar malawi malaysia mali malta mauritania mexico moldova
+    mongolia montenegro morocco mozambique myanmar namibia nepal netherlands
+    newzealand nicaragua niger nigeria norway oman pakistan panama paraguay peru
+    philippines poland portugal qatar romania russia rwanda saudi senegal serbia
+    singapore slovakia slovenia somalia spain srilanka sudan sweden switzerland
+    syria taiwan tajikistan tanzania thailand togo tunisia turkey turkmenistan
+    uganda ukraine uruguay uzbekistan venezuela vietnam yemen zambia zimbabwe
+    california texas florida hawaii alaska nevada arizona
+    """.split()
+)
+
 
 def _extract_entities(text: str) -> list[ExtractedFact]:
     names: set[str] = set()
@@ -227,6 +294,9 @@ def _extract_entities(text: str) -> list[ExtractedFact]:
             name = " ".join(match.group(1).split())
             if len(name) >= 5:
                 names.add(name)
+    for word in _WORD.findall(text):
+        if word.casefold() in _PLACES:
+            names.add(word)
     return [
         ExtractedFact(
             fact_type="entity",

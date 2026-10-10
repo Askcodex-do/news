@@ -41,8 +41,95 @@ _OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
 _STOPWORDS = frozenset(
     """a an and are as at be by for from has have in is it its of on or that the
     this to was were will with after before over under into during amid say says
-    said new news report reports""".split()
+    said new news report reports force forces forced prompt prompts prompted
+    leave leaves left""".split()
 )
+
+# Number words are folded to digits so "twelve killed" and "12 killed" tokenize
+# identically; digits are then dropped (see `_tokens`).
+_NUMBER_WORDS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+    "hundred": 100,
+    "thousand": 1000,
+}
+
+# News-register synonyms folded onto one token so paraphrases share vocabulary
+# (spec section 7). This is what lets the offline bag-of-tokens stand-in treat
+# "quake" and "earthquake", or "killed" and "dead", as the same term. Kept small
+# and deliberate: it helps a lexical embedder, it does not model language.
+_SYNONYMS = {
+    "quake": "earthquake",
+    "tremor": "earthquake",
+    "aftershock": "earthquake",
+    "seismic": "earthquake",
+    "temblor": "earthquake",
+    "bushfire": "wildfire",
+    "forestfire": "wildfire",
+    "blaze": "wildfire",
+    "flooding": "flood",
+    "floods": "flood",
+    "deluge": "flood",
+    "kill": "death",
+    "kills": "death",
+    "killed": "death",
+    "killing": "death",
+    "deaths": "death",
+    "dead": "death",
+    "died": "death",
+    "fatalities": "death",
+    "fatal": "death",
+    "toll": "death",
+    "injuries": "injury",
+    "wounded": "injury",
+    "hits": "hit",
+    "struck": "hit",
+    "strike": "hit",
+    "strikes": "hit",
+    "striking": "hit",
+    "evacuations": "evacuation",
+    "evacuated": "evacuation",
+    "displaced": "displacement",
+    "displaces": "displacement",
+    "thousands": "thousand",
+}
+
+# Light suffix stemming. Applied after synonym folding so "killed" -> "death"
+# is not re-stemmed. Only strips common inflectional suffixes, and never below a
+# three-character stem, to avoid mangling short words.
+_STEM_SUFFIXES = ("ings", "ing", "ies", "ied", "es", "ed", "s")
+
+
+def _stem(word: str) -> str:
+    for suffix in _STEM_SUFFIXES:
+        if len(word) > len(suffix) + 2 and word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
 
 
 class EmbeddingProvider(ABC):
@@ -58,10 +145,21 @@ class EmbeddingProvider(ABC):
 
 
 def _tokens(text: str) -> list[str]:
-    # Numbers are dropped here on purpose: quantities carry their own dedicated
-    # clustering signal (number overlap), and leaving them in would make
-    # "flood kills 5" and "flood kills 12" look semantically different.
-    return [t for t in _TOKEN.findall(text.casefold()) if t not in _STOPWORDS and not t.isdigit()]
+    # Tokens are folded (number words -> digits, news synonyms -> one term) and
+    # lightly stemmed so paraphrases overlap, then digits are dropped: a changed
+    # quantity ("5 killed" vs "12 killed") must not make two reports about the
+    # same event look dissimilar. Quantities carry their own dedicated
+    # clustering signal (number overlap) instead.
+    tokens: list[str] = []
+    for token in _TOKEN.findall(text.casefold()):
+        if token in _STOPWORDS:
+            continue
+        if token in _NUMBER_WORDS:
+            continue
+        if token.isdigit():
+            continue
+        tokens.append(_stem(_SYNONYMS.get(token, token)))
+    return tokens
 
 
 def _l2_normalize(vector: list[float]) -> list[float]:

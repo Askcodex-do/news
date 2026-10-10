@@ -175,6 +175,27 @@ async def test_identical_topic_reports_cluster_into_one_event(
     assert len(members) == 2
 
 
+async def test_paraphrased_reports_cluster_offline(
+    db_session, clean_events, make_source, make_report
+):
+    """The offline hashing embedder must cluster paraphrases of one event.
+
+    Regression guard for the gap where "Earthquake strikes Japan killing 12" and
+    "Twelve killed after earthquake hits Japan" scored below the threshold with
+    the bare bag-of-tokens embedder and only merged via shared numbers.
+    """
+    source = await make_source()
+    a = await make_report(source, title="Earthquake strikes Japan killing 12")
+    b = await make_report(source, title="Twelve killed after earthquake hits Japan")
+
+    event_a, created_a = await cluster_report(db_session, a.id)
+    event_b, created_b = await cluster_report(db_session, b.id)
+
+    assert created_a is True
+    assert created_b is False
+    assert event_a.id == event_b.id
+
+
 async def test_unrelated_reports_create_separate_events(
     db_session, clean_events, make_source, make_report
 ):

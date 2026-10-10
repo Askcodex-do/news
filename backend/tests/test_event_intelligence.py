@@ -57,6 +57,79 @@ def test_similar_text_scores_higher_than_unrelated_text():
     assert cosine_similarity(a, b) > cosine_similarity(a, c)
 
 
+# The offline hashing provider is a lexical stand-in, not a semantic model, so
+# this is a regression guard for how well it must at least do: paraphrase pairs
+# that describe one event must land at/above the clustering threshold once the
+# entity and number signals from `facts.py` are added. See
+# `test_clustering_db.py` for the same pairs driven through `cluster_report`.
+_PARAPHRASE_PAIRS = [
+    ("Earthquake strikes Japan killing 12", "Twelve killed after earthquake hits Japan"),
+    ("Earthquake strikes Japan killing 12", "Japan earthquake: 12 dead"),
+    ("Magnitude 6.8 earthquake strikes Japan", "Strong 6.8 quake hits Japan"),
+    ("Flooding in Bangladesh displaces thousands", "Thousands displaced by Bangladesh floods"),
+    ("Wildfire forces evacuations in California", "California wildfire prompts evacuation orders"),
+    ("Earthquake strikes Japan killing 12", "Quake in Japan leaves twelve dead"),
+]
+
+
+def _combined_similarity(a: str, b: str) -> float:
+    """Reproduce the clustering score for two headlines, offline."""
+    import asyncio
+
+    from app.services.clustering import W_ENTITY, W_NUMBER, W_SEMANTIC
+
+    provider = HashingEmbeddingProvider(1536)
+
+    def signals(text: str):
+        facts = extract_facts(text, "")
+        entities = frozenset(
+            f.value_text.casefold() for f in facts if f.fact_type == "entity" and f.value_text
+        )
+        numbers = frozenset(f.fact_key for f in facts if f.fact_type == "number")
+        return entities, numbers
+
+    def jaccard(x, y):
+        return len(x & y) / len(x | y) if x | y else 0.0
+
+    va, vb = asyncio.run(provider.embed([a, b]))
+    semantic = max(0.0, cosine_similarity(va, vb))
+    ea, na = signals(a)
+    eb, nb = signals(b)
+    return W_SEMANTIC * semantic + W_ENTITY * jaccard(ea, eb) + W_NUMBER * jaccard(na, nb)
+
+
+@pytest.mark.parametrize(("a", "b"), _PARAPHRASE_PAIRS)
+def test_offline_embedder_clusters_paraphrases(a, b):
+    """Every paraphrase pair clears the default threshold offline (spec 7)."""
+    from app.core.config import settings
+
+    assert _combined_similarity(a, b) >= settings.cluster_similarity_threshold
+
+
+def test_offline_embedder_keeps_distinct_events_apart():
+    """The recall fix must not merge genuinely different events."""
+    from app.core.config import settings
+
+    distinct = [
+        ("Earthquake strikes Japan killing 12", "Earthquake strikes Chile killing 12"),
+        ("Earthquake strikes Japan killing 12", "Japan election: polls open"),
+        ("Flooding in Bangladesh displaces thousands", "Wildfire forces evacuations in California"),
+        ("Magnitude 6.8 earthquake strikes Japan", "Magnitude 5.1 earthquake hits Greece"),
+    ]
+    for a, b in distinct:
+        assert _combined_similarity(a, b) < settings.cluster_similarity_threshold
+
+
+def test_number_words_fold_to_digits_in_the_embedding():
+    import asyncio
+
+    provider = HashingEmbeddingProvider(512)
+    digits = asyncio.run(provider.embed(["12 killed in the quake"]))[0]
+    words = asyncio.run(provider.embed(["twelve killed in the earthquake"]))[0]
+    # "killed"->death and "quake"->earthquake fold both sides onto one token set.
+    assert cosine_similarity(digits, words) > 0.9
+
+
 # --- Fact extraction ----------------------------------------------------------
 
 
@@ -83,6 +156,18 @@ def test_conflicting_numbers_produce_different_keys():
 def test_magnitude_is_extracted():
     keys = {f.fact_key for f in extract_facts("Magnitude 6.8 earthquake hits Japan")}
     assert "number:magnitude:6.8" in keys
+
+
+def test_number_words_yield_the_same_claim_as_digits():
+    words = {f.fact_key for f in extract_facts("Twelve killed after earthquake hits Japan")}
+    digits = {f.fact_key for f in extract_facts("12 killed after earthquake hits Japan")}
+    assert "number:deaths:12" in words
+    assert "number:deaths:12" in digits
+
+
+def test_single_word_country_is_an_entity():
+    keys = {f.fact_key for f in extract_facts("Earthquake strikes Japan killing 12")}
+    assert "entity:japan" in keys
 
 
 def test_dates_are_extracted_in_iso_form():

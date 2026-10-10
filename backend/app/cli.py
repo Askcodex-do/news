@@ -5,9 +5,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import uuid
 from pathlib import Path
 
-from app.core.config import REPO_ROOT
+from app.core.config import REPO_ROOT, settings
 from app.db.session import SessionLocal
 from app.services.config_loader import (
     load_all_sources,
@@ -28,6 +29,15 @@ async def _worker(tick_seconds: int) -> None:
     from app.services.worker_loop import run_worker
 
     await run_worker(tick_seconds=tick_seconds)
+
+
+async def _maintenance() -> None:
+    """One housekeeping sweep: archive stale events, prune finished jobs."""
+    from app.services.maintenance import run_maintenance
+
+    async with SessionLocal() as session:
+        result = await run_maintenance(session)
+    print(result.as_dict())
 
 
 async def _ingest_once() -> None:
@@ -61,6 +71,53 @@ async def _poll_source(slug: str) -> None:
         print(json.dumps(stats.as_dict(), indent=2))
         for error in stats.errors:
             print(f"  ! {error}")
+
+
+async def _cluster_backfill(limit: int | None) -> None:
+    """Cluster reports that were ingested before Phase 3 existed.
+
+    Runs the real clustering + verification path over every NEW report, so a
+    deployment that upgrades into Phase 3 does not have to wait for the next
+    poll cycle to build its event graph.
+    """
+    from sqlalchemy import select
+
+    from app.models.enums import SourceReportStatus
+    from app.models.source_report import SourceReport
+    from app.services.clustering import cluster_report
+    from app.services.verification import verify_event
+
+    async with SessionLocal() as session:
+        stmt = (
+            select(SourceReport.id)
+            .where(SourceReport.status == SourceReportStatus.NEW)
+            .order_by(SourceReport.retrieved_at.asc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        report_ids = list((await session.execute(stmt)).scalars().all())
+
+    events: dict[str, bool] = {}
+    for report_id in report_ids:
+        async with SessionLocal() as session:
+            try:
+                event, created = await cluster_report(session, report_id)
+                await session.commit()
+                events[str(event.id)] = created
+            except Exception as exc:  # noqa: BLE001 - keep going on one bad report
+                await session.rollback()
+                print(f"  ! report {report_id}: {type(exc).__name__}: {exc}")
+
+    created_count = sum(1 for created in events.values() if created)
+    for event_id in events:
+        async with SessionLocal() as session:
+            await verify_event(session, uuid.UUID(event_id))
+            await session.commit()
+
+    print(
+        f"clustered {len(report_ids)} report(s) into {len(events)} event(s) "
+        f"({created_count} newly created)"
+    )
 
 
 def _export_seeds() -> None:
@@ -97,8 +154,13 @@ def main() -> None:
     sub.add_parser("ingest-once", help="run one scheduling + execution pass")
     poll = sub.add_parser("poll-source", help="poll one source by slug immediately")
     poll.add_argument("slug")
+    backfill = sub.add_parser(
+        "cluster-backfill", help="cluster reports ingested before Phase 3 existed"
+    )
+    backfill.add_argument("--limit", type=int, default=None)
     worker = sub.add_parser("worker", help="run the continuous ingestion worker")
-    worker.add_argument("--tick-seconds", type=int, default=10)
+    worker.add_argument("--tick-seconds", type=int, default=settings.worker_tick_seconds)
+    sub.add_parser("maintenance", help="run one housekeeping sweep now")
     args = parser.parse_args()
 
     if args.command == "seed":
@@ -109,8 +171,12 @@ def main() -> None:
         asyncio.run(_ingest_once())
     elif args.command == "poll-source":
         asyncio.run(_poll_source(args.slug))
+    elif args.command == "cluster-backfill":
+        asyncio.run(_cluster_backfill(args.limit))
     elif args.command == "worker":
         asyncio.run(_worker(args.tick_seconds))
+    elif args.command == "maintenance":
+        asyncio.run(_maintenance())
 
 
 if __name__ == "__main__":

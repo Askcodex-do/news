@@ -123,7 +123,90 @@ backs off (up to 8× its interval) and eventually shows as `down` in
   an image.
 - Every job carries an idempotency key so retries never duplicate output.
 
-## What to monitor (Phase 7 target)
+## Production hardening (Phase 8)
+
+### Rate limiting
+
+Read endpoints are rate limited per client (keyed on the resolved client IP).
+The default store is in-process; set `RATE_LIMIT_REDIS_ENABLED=true` to share
+one counter across replicas via Redis. Admin/ops endpoints have their own,
+stricter limit. `/health` is exempt so liveness probes are never throttled.
+
+When a client exceeds its limit the response is `429` with a `Retry-After`
+header, and a security event is logged (the raw IP is not written to logs).
+
+### Security headers
+
+Every response carries `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a strict
+`Content-Security-Policy` (`default-src 'none'; frame-ancestors 'none'; …`).
+`Strict-Transport-Security` is added only when `ENABLE_HSTS=true` (HTTPS
+deployments).
+
+### SSRF-safe outbound fetches
+
+Every feed fetch is validated first (`app/services/url_safety.py`): only
+`http(s)` is allowed and private, loopback, link-local and cloud-metadata
+addresses are refused. Set `BLOCK_PRIVATE_FETCH_HOSTS=false` only for local
+development against a feed on a private host.
+
+### AI cost controls
+
+`AI_MAX_REQUESTS_PER_HOUR` caps AI calls per hour (0 disables the cap). When the
+budget is exhausted, article generation defers — it does not publish and does
+not crash — and the deferral is logged. Current spend is exposed as
+`cost` on `/admin/metrics`.
+
+### Startup config guard
+
+In `production`, `settings.production_problems()` reports default/weak secrets,
+a default database password, and untrusted proxy headers. The problems are
+logged at startup; set `STRICT_CONFIG=true` to make them fatal.
+
+### Backups and disaster recovery
+
+`infrastructure/deployment/` contains three scripts (run from cron):
+
+```bash
+# Back up to $BACKUP_DIR (default ./backups), keeping $BACKUP_RETENTION_DAYS.
+PGPASSWORD=… ./infrastructure/deployment/backup.sh
+
+# Restore a dump into $PGDATABASE (or a named database).
+PGPASSWORD=… ./infrastructure/deployment/restore.sh backups/news-<ts>.dump
+
+# Prove a dump restores into a throwaway database and report row counts.
+PGPASSWORD=… ./infrastructure/deployment/dr_drill.sh backups/news-<ts>.dump
+```
+
+`backup.sh` writes to a temp file and renames on success, so a crashed run never
+leaves a truncated file that looks valid. `dr_drill.sh` restores into a
+scratch database (`news_drill` by default), counts rows in the key tables, and
+drops it — a repeatable DR check rather than a hope. The drill creates and drops
+a database, so run it as an admin/backup role (`POSTGRES_USER`); the app's
+least-privilege role is deliberately refused with a clear message.
+
+Use a `pg_dump`/`pg_restore` client whose major version matches the server
+(pg16 here). A newer client writes settings the older server does not know —
+e.g. a v17 client emits `SET transaction_timeout = 0`, which a pg16 server
+rejects, making the restore appear to fail. Install the matching client from the
+PGDG repositories (`postgresql-client-16`) rather than the distro default.
+
+### Load testing
+
+`backend/tests/load/loadtest.py` drives the read API with concurrent virtual
+users and fails if p95 latency or the error rate exceeds the given budget:
+
+```bash
+cd backend && . .venv/bin/activate
+python tests/load/loadtest.py --base-url http://localhost:8000 \
+  --users 50 --duration 30 --max-p95-ms 400 --max-error-rate 0.01
+```
+
+Run it with the rate limiter off (`RATE_LIMIT_ENABLED=false`) to measure raw
+capacity, or on to confirm the limiter sheds load (expect `429`s under a large
+`--users`).
+
+## What to monitor
 
 Sources online/offline, reports ingested/hour, duplicates detected, events
 created/merged, articles generated/rejected, fact-check failures, AI failures,

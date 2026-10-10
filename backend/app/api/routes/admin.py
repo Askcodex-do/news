@@ -7,6 +7,7 @@ read the queue, trigger a single source, and watch ingestion counters.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,15 +16,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin
 from app.db.session import get_session
-from app.models.enums import SourceReportStatus
+from app.models.enums import EventStatus, SourceReportStatus
+from app.models.event import Event, EventConflict, EventFact
 from app.models.job import ProcessingJob
 from app.models.source import Source, SourceHealth
 from app.models.source_report import SourceReport
-from app.schemas import IngestionStatsOut, JobOut, SourceHealthRow
+from app.schemas import (
+    AccuracyMetricsOut,
+    EventConflictOut,
+    EventDetailOut,
+    EventFactOut,
+    EventIntelligenceStatsOut,
+    IngestionStatsOut,
+    JobOut,
+    OpsMetricsOut,
+    SourceHealthRow,
+)
 from app.services import queue
+from app.services.article_generation import (
+    generate_article_for_event,
+    generate_localized_articles,
+)
+from app.services.images import (
+    attach_image_to_article,
+    image_provider_configured,
+    purge_expired_image_references,
+)
 from app.services.ingestion import ingest_source
+from app.services.maintenance import run_maintenance
+from app.services.observability import accuracy_snapshot, ops_snapshot
 from app.services.queue import JobType
 from app.services.scheduler import enqueue_due_sources
+from app.services.verification import verify_event
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -139,3 +163,275 @@ async def ingestion_stats(session: AsyncSession = Depends(get_session)) -> Inges
         queue=await queue.queue_depth(session),
         generated_at=now,
     )
+
+
+@router.get("/metrics", response_model=OpsMetricsOut)
+async def metrics(session: AsyncSession = Depends(get_session)) -> OpsMetricsOut:
+    """Operational snapshot for a dashboard (spec section 33)."""
+    return OpsMetricsOut.model_validate((await ops_snapshot(session)).as_dict())
+
+
+@router.get("/accuracy", response_model=AccuracyMetricsOut)
+async def accuracy(session: AsyncSession = Depends(get_session)) -> AccuracyMetricsOut:
+    """Accuracy dashboard (spec section 33).
+
+    Tracks what the spec calls out explicitly: published articles, fact
+    validation failures, corrections, source conflicts and low-confidence
+    publications.
+    """
+    return AccuracyMetricsOut.model_validate((await accuracy_snapshot(session)).as_dict())
+
+
+@router.post("/maintenance/run")
+async def maintenance_run(session: AsyncSession = Depends(get_session)) -> dict:
+    """Run the housekeeping sweeps now (spec sections 22, 25)."""
+    return (await run_maintenance(session)).as_dict()
+
+
+@router.get("/events", response_model=list[EventDetailOut])
+async def list_events(
+    session: AsyncSession = Depends(get_session),
+    status_filter: EventStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> list[EventDetailOut]:
+    """Recent events with their evidence, for operator review."""
+    stmt = select(Event).order_by(Event.last_updated_at.desc()).limit(limit)
+    if status_filter is not None:
+        stmt = stmt.where(Event.status == status_filter)
+    events = list((await session.execute(stmt)).scalars().all())
+
+    result: list[EventDetailOut] = []
+    for event in events:
+        facts = (
+            (
+                await session.execute(
+                    select(EventFact)
+                    .where(EventFact.event_id == event.id)
+                    .order_by(EventFact.fact_type, EventFact.fact_key)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        conflicts = (
+            (await session.execute(select(EventConflict).where(EventConflict.event_id == event.id)))
+            .scalars()
+            .all()
+        )
+        result.append(
+            EventDetailOut(
+                id=event.id,
+                title=event.title,
+                event_type=event.event_type,
+                country=event.country,
+                status=event.status,
+                confidence_score=event.confidence_score,
+                importance_score=event.importance_score,
+                first_detected_at=event.first_detected_at,
+                last_updated_at=event.last_updated_at,
+                report_count=event.report_count,
+                independent_source_count=event.independent_source_count,
+                conflict_count=event.conflict_count,
+                facts=[EventFactOut.model_validate(fact) for fact in facts],
+                conflicts=[EventConflictOut.model_validate(conflict) for conflict in conflicts],
+            )
+        )
+    return result
+
+
+@router.get("/intelligence/stats", response_model=EventIntelligenceStatsOut)
+async def intelligence_stats(
+    session: AsyncSession = Depends(get_session),
+) -> EventIntelligenceStatsOut:
+    """Accuracy dashboard: how much is verified, conflicted, or uncertain."""
+    now = datetime.now(UTC)
+
+    async def scalar(stmt) -> float | int | None:  # type: ignore[no-untyped-def]
+        return (await session.execute(stmt)).scalar_one()
+
+    events_total = int(await scalar(select(func.count()).select_from(Event)) or 0)
+    status_rows = (
+        await session.execute(select(Event.status, func.count()).group_by(Event.status))
+    ).all()
+    events_by_status = {str(status): int(count) for status, count in status_rows}
+
+    facts_total = int(await scalar(select(func.count()).select_from(EventFact)) or 0)
+    conflicts_total = int(await scalar(select(func.count()).select_from(EventConflict)) or 0)
+    conflicts_unresolved = int(
+        await scalar(
+            select(func.count())
+            .select_from(EventConflict)
+            .where(EventConflict.status == "unresolved")
+        )
+        or 0
+    )
+    events_with_conflicts = int(
+        await scalar(select(func.count()).select_from(Event).where(Event.conflict_count > 0)) or 0
+    )
+    mean_confidence = await scalar(select(func.avg(Event.confidence_score)))
+    low_confidence_published = int(
+        await scalar(
+            select(func.count())
+            .select_from(Event)
+            .where(
+                Event.status.in_((EventStatus.PUBLISHED, EventStatus.UPDATING)),
+                Event.confidence_score < 70,
+            )
+        )
+        or 0
+    )
+
+    return EventIntelligenceStatsOut(
+        events_total=events_total,
+        events_by_status=events_by_status,
+        events_verified=int(events_by_status.get(EventStatus.VERIFIED.value, 0)),
+        events_unverified=int(events_by_status.get(EventStatus.UNVERIFIED.value, 0)),
+        events_with_conflicts=events_with_conflicts,
+        facts_total=facts_total,
+        conflicts_total=conflicts_total,
+        conflicts_unresolved=conflicts_unresolved,
+        mean_confidence=round(float(mean_confidence), 2) if mean_confidence is not None else None,
+        low_confidence_published=low_confidence_published,
+        generated_at=now,
+    )
+
+
+@router.post("/events/{event_id}/verify")
+async def verify_event_now(
+    event_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Re-run verification for one event (facts, conflicts, confidence)."""
+    try:
+        event = await verify_event(session, event_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {
+        "event_id": str(event.id),
+        "status": event.status.value,
+        "confidence_score": event.confidence_score,
+        "independent_source_count": event.independent_source_count,
+        "conflict_count": event.conflict_count,
+    }
+
+
+@router.post("/events/{event_id}/generate")
+async def generate_article_now(
+    event_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Generate (or update) the article for one event, validating before publish.
+
+    Requires a configured AI provider. On any validation failure the event is
+    left unpublished and the reason is returned — this endpoint never publishes
+    an unsupported article.
+    """
+    try:
+        outcome = await generate_article_for_event(session, event_id, reason="manual")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {
+        "event_id": str(event_id),
+        "article_id": str(outcome.article_id) if outcome.article_id else None,
+        "published": outcome.published,
+        "reason": outcome.reason,
+        "version": outcome.version,
+        "failures": outcome.validation.failures if outcome.validation else [],
+    }
+
+
+@router.post("/events/{event_id}/localize")
+async def localize_event_now(
+    event_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Generate country-angle editions for an event (spec section 18).
+
+    The countries come from the ``country_sources`` mapping, never from an LLM.
+    Each localized edition reuses the same verified evidence, so localization
+    re-angles confirmed facts and cannot introduce local claims.
+    """
+    try:
+        outcomes = await generate_localized_articles(session, event_id, reason="manual")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {
+        "event_id": str(event_id),
+        "localized": {
+            country: {
+                "article_id": str(outcome.article_id) if outcome.article_id else None,
+                "published": outcome.published,
+                "reason": outcome.reason,
+            }
+            for country, outcome in outcomes.items()
+        },
+    }
+
+
+@router.post("/articles/{article_id}/image")
+async def generate_article_image(
+    article_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Generate (or reuse) an article image reference (spec section 20).
+
+    Only metadata is stored — provider, generation id, prompt hash and a
+    transient URL. If no image provider is configured the article is left
+    without an image; publication is never affected (spec section 27).
+    """
+    if not image_provider_configured():
+        return {"article_id": str(article_id), "generated": False, "reason": "no image provider"}
+    image = await attach_image_to_article(session, article_id)
+    await session.commit()
+    if image is None:
+        return {"article_id": str(article_id), "generated": False, "reason": "no image produced"}
+    return {
+        "article_id": str(article_id),
+        "generated": True,
+        "image_provider": image.image_provider,
+        "generation_id": image.generation_id,
+        "prompt_hash": image.prompt_hash,
+        "ephemeral_url": image.ephemeral_url,
+        "expires_at": image.expires_at,
+    }
+
+
+@router.post("/images/purge")
+async def purge_images(session: AsyncSession = Depends(get_session)) -> dict:
+    """Delete expired transient image references (spec section 20)."""
+    removed = await purge_expired_image_references(session)
+    await session.commit()
+    return {"purged": removed}
+
+
+@router.get("/articles/rejected")
+async def list_rejected_articles(
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(50, ge=1, le=200),
+) -> list[dict]:
+    """Events in editorial review that have no published article.
+
+    The accuracy dashboard's rejected queue: these are the stories the system
+    chose not to publish, which is a feature (spec section 15), not an outage.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(Event)
+                .where(Event.status == EventStatus.EDITORIAL_REVIEW)
+                .order_by(Event.importance_score.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "event_id": str(event.id),
+            "title": event.title,
+            "confidence_score": event.confidence_score,
+            "importance_score": event.importance_score,
+            "conflict_count": event.conflict_count,
+        }
+        for event in rows
+    ]

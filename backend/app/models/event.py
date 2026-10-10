@@ -45,6 +45,12 @@ class Event(Base, UUIDMixin, TimestampMixin):
     importance_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     confidence_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
+    # Denormalized counts kept in step by the clustering/verification workers so
+    # ranking and the API do not have to aggregate on every read.
+    report_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    independent_source_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    conflict_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     status: Mapped[EventStatus] = mapped_column(
         Enum(EventStatus, name="event_status"),
         default=EventStatus.DETECTED,
@@ -53,6 +59,9 @@ class Event(Base, UUIDMixin, TimestampMixin):
     )
     # Centroid embedding of clustered reports; used by the clustering worker.
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
+    # Bucket key of the centroid, for cheap candidate selection before the
+    # (more expensive) cosine comparison.
+    simhash: Mapped[str | None] = mapped_column(String(64), index=True)
 
 
 class EventReport(Base, UUIDMixin, TimestampMixin):
@@ -84,6 +93,9 @@ class EventFact(Base, UUIDMixin, TimestampMixin):
         PG_UUID(as_uuid=True), ForeignKey("events.id"), index=True, nullable=False
     )
     fact_type: Mapped[str] = mapped_column(String(32), default="statement", nullable=False)
+    # Stable identity for the fact across sources, so the same claim extracted
+    # from two reports collapses onto one row (e.g. "number:deaths:12").
+    fact_key: Mapped[str | None] = mapped_column(String(160), index=True)
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     # Structured value for numeric facts (e.g. casualties) so contradictions
     # between reports can be detected deterministically (spec section 24).
@@ -97,6 +109,25 @@ class EventFact(Base, UUIDMixin, TimestampMixin):
     confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("event_facts.id")
+    )
+
+
+class EventFactSource(Base, UUIDMixin, TimestampMixin):
+    """Which source reports assert a given fact (evidence for the AI writer).
+
+    Keeping the report-level provenance lets the article generator cite the
+    exact sources behind each confirmed fact and lets us count *independent*
+    sources rather than raw report volume.
+    """
+
+    __tablename__ = "event_fact_sources"
+    __table_args__ = (UniqueConstraint("fact_id", "source_report_id", name="uq_fact_source"),)
+
+    fact_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("event_facts.id"), index=True, nullable=False
+    )
+    source_report_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("source_reports.id"), index=True, nullable=False
     )
 
 

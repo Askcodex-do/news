@@ -23,11 +23,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.models.article import Article
+from app.models.enums import EventStatus
 from app.models.job import ProcessingJob
 from app.models.source import Source
 from app.services import queue
+from app.services.article_generation import (
+    generate_article_for_event,
+    generate_localized_articles,
+)
+from app.services.clustering import cluster_report
+from app.services.images import attach_image_to_article, image_provider_configured
 from app.services.ingestion import IngestStats, ingest_source
 from app.services.queue import JobType
+from app.services.verification import verify_event
 
 logger = get_logger(__name__)
 
@@ -41,6 +50,18 @@ class ScheduleResult:
     due: int = 0
     enqueued: int = 0
     already_queued: int = 0
+
+
+# Job types the worker loop executes, in priority order. Clustering and
+# verification are latency-sensitive (they gate publishing) and are produced by
+# polling, so they run ahead of the next poll.
+_HANDLED_JOB_TYPES = (
+    JobType.CLUSTER_EVENT,
+    JobType.VERIFY_EVENT,
+    JobType.GENERATE_ARTICLE,
+    JobType.GENERATE_IMAGE,
+    JobType.POLL_SOURCE,
+)
 
 
 def _now() -> datetime:
@@ -121,31 +142,153 @@ async def _run_poll_job(session: AsyncSession, job_payload: str | None) -> Inges
         raise ValueError(f"source {source_id} no longer exists")
     if not source.enabled:
         return IngestStats(errors=["source disabled"])
-    return await ingest_source(session, source)
+    stats = await ingest_source(session, source)
+    # Hand each new report to the clustering stage. Idempotent by report id, so
+    # a retried poll never double-clusters a report.
+    for report_id in stats.stored_ids:
+        await queue.enqueue(
+            session,
+            job_type=JobType.CLUSTER_EVENT,
+            idempotency_key=f"{JobType.CLUSTER_EVENT.value}:{report_id}",
+            payload={"report_id": str(report_id)},
+        )
+    return stats
+
+
+async def _run_cluster_job(session: AsyncSession, job_payload: str | None) -> str:
+    payload = json.loads(job_payload) if job_payload else {}
+    report_id = uuid.UUID(payload["report_id"])
+    event, created = await cluster_report(session, report_id)
+    # Re-verify the event now that it has a new member. The key includes the
+    # event's report count so each distinct membership state verifies once.
+    await queue.enqueue(
+        session,
+        job_type=JobType.VERIFY_EVENT,
+        idempotency_key=(
+            f"{JobType.VERIFY_EVENT.value}:{event.id}:{event.report_count}:{int(created)}"
+        ),
+        payload={"event_id": str(event.id)},
+    )
+    return f"{'created' if created else 'attached'} event {event.id}"
+
+
+async def _run_verify_job(session: AsyncSession, job_payload: str | None) -> str:
+    payload = json.loads(job_payload) if job_payload else {}
+    event_id = uuid.UUID(payload["event_id"])
+    event = await verify_event(session, event_id)
+    # A verified event, or an already-published one that just changed, gets an
+    # article (spec section 22: one article, updated). Keyed by report count so
+    # each distinct membership state generates once and retries are safe.
+    if event.status in (EventStatus.VERIFIED, EventStatus.PUBLISHED, EventStatus.UPDATING):
+        await queue.enqueue(
+            session,
+            job_type=JobType.GENERATE_ARTICLE,
+            idempotency_key=(f"{JobType.GENERATE_ARTICLE.value}:{event.id}:r{event.report_count}"),
+            payload={"event_id": str(event.id)},
+        )
+    return f"event {event.id} status={event.status} confidence={event.confidence_score:.1f}"
+
+
+async def _run_generate_job(session: AsyncSession, job_payload: str | None) -> str:
+    payload = json.loads(job_payload) if job_payload else {}
+    event_id = uuid.UUID(payload["event_id"])
+    outcome = await generate_article_for_event(session, event_id)
+    # Once the global article exists, produce the country-angle editions the
+    # configured mapping calls for (spec section 18). Localization is additive:
+    # a localized draft that fails validation is simply skipped, never published.
+    localized: dict[str, bool] = {}
+    if outcome.published:
+        for country, result in (await generate_localized_articles(session, event_id)).items():
+            localized[country] = result.published
+        # Image generation is a separate, optional job so it can never delay or
+        # block publication (spec section 27).
+        await _enqueue_image_jobs(session, event_id)
+    return (
+        f"event {event_id} published={outcome.published} ({outcome.reason}) localized={localized}"
+    )
+
+
+async def _enqueue_image_jobs(session: AsyncSession, event_id: uuid.UUID) -> None:
+    """Enqueue one image job per published article of an event, if enabled.
+
+    With no image provider configured nothing is enqueued, so the worker never
+    spins on a deployment that has no image key.
+    """
+    if not image_provider_configured():
+        return
+    article_ids = (
+        (
+            await session.execute(
+                select(Article.id).where(
+                    Article.event_id == event_id, Article.is_published.is_(True)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for article_id in article_ids:
+        await queue.enqueue(
+            session,
+            job_type=JobType.GENERATE_IMAGE,
+            idempotency_key=f"{JobType.GENERATE_IMAGE.value}:{article_id}",
+            payload={"article_id": str(article_id)},
+        )
+
+
+async def _run_image_job(session: AsyncSession, job_payload: str | None) -> str:
+    payload = json.loads(job_payload) if job_payload else {}
+    article_id = uuid.UUID(payload["article_id"])
+    image = await attach_image_to_article(session, article_id)
+    if image is None:
+        return f"article {article_id} no image (published without one)"
+    return f"article {article_id} image provider={image.image_provider}"
 
 
 async def process_pending_jobs(session: AsyncSession, *, worker: str, max_jobs: int = 25) -> int:
     """Claim and run up to ``max_jobs`` pending jobs. Returns how many ran.
 
-    Phase 2 only handles ``poll_source``; later phases register handlers here.
+    Handlers are dispatched by job type; each runs in its own commit so one
+    failure cannot roll back another job's work.
     """
     handled = 0
     for _ in range(max_jobs):
-        job = await queue.claim_next(session, job_type=JobType.POLL_SOURCE, locked_by=worker)
+        job = await _claim_any(session, worker)
         if job is None:
             break
-        # Commit the claim so other workers see the lock immediately.
         job_id = job.id
+        job_type = job.job_type
+        # Commit the claim so other workers see the lock immediately.
         await session.commit()
 
         try:
-            if job.job_type == JobType.POLL_SOURCE.value:
+            if job_type == JobType.POLL_SOURCE.value:
                 stats = await _run_poll_job(session, job.payload)
                 await queue.mark_succeeded(session, job)
                 await session.commit()
                 logger.debug("job %s done: %s", job_id, stats.as_dict())
+            elif job_type == JobType.CLUSTER_EVENT.value:
+                summary = await _run_cluster_job(session, job.payload)
+                await queue.mark_succeeded(session, job)
+                await session.commit()
+                logger.debug("job %s done: %s", job_id, summary)
+            elif job_type == JobType.VERIFY_EVENT.value:
+                summary = await _run_verify_job(session, job.payload)
+                await queue.mark_succeeded(session, job)
+                await session.commit()
+                logger.debug("job %s done: %s", job_id, summary)
+            elif job_type == JobType.GENERATE_ARTICLE.value:
+                summary = await _run_generate_job(session, job.payload)
+                await queue.mark_succeeded(session, job)
+                await session.commit()
+                logger.debug("job %s done: %s", job_id, summary)
+            elif job_type == JobType.GENERATE_IMAGE.value:
+                summary = await _run_image_job(session, job.payload)
+                await queue.mark_succeeded(session, job)
+                await session.commit()
+                logger.debug("job %s done: %s", job_id, summary)
             else:
-                raise ValueError(f"no handler for job type {job.job_type!r}")
+                raise ValueError(f"no handler for job type {job_type!r}")
         except Exception as exc:  # noqa: BLE001 - isolate per-job failures
             await session.rollback()
             failed = await session.get(ProcessingJob, job_id)
@@ -155,3 +298,13 @@ async def process_pending_jobs(session: AsyncSession, *, worker: str, max_jobs: 
             logger.exception("job %s failed", job_id)
         handled += 1
     return handled
+
+
+async def _claim_any(session: AsyncSession, worker: str) -> ProcessingJob | None:
+    """Claim the oldest runnable job across every handled job type.
+
+    A single priority-ordered claim, not one claim per type: claiming per type
+    would always return a poll job when one is pending and starve the
+    clustering and verification stages behind a steady stream of polls.
+    """
+    return await queue.claim_next(session, job_types=_HANDLED_JOB_TYPES, locked_by=worker)

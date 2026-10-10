@@ -16,6 +16,7 @@ is rejected rather than stored, and nothing is fetched over a non-http(s) scheme
 from __future__ import annotations
 
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -49,6 +50,8 @@ class IngestStats:
     duplicate_batch: int = 0
     rejected: int = 0
     errors: list[str] = field(default_factory=list)
+    # IDs of reports stored by this run, so the caller can enqueue clustering.
+    stored_ids: list[uuid.UUID] = field(default_factory=list)
 
     @property
     def considered(self) -> int:
@@ -160,26 +163,27 @@ async def ingest_entries(
             stats.duplicate_content += 1
             continue
 
-        session.add(
-            SourceReport(
-                source_id=source.id,
-                source_url=entry.link,
-                canonical_url=entry.canonical_url,
-                canonical_url_hash=url_hash,
-                title=entry.title,
-                description=entry.description or None,
-                published_at=entry.published_at,
-                retrieved_at=datetime.now(UTC),
-                language=(entry.language or source.language or "en")[:16],
-                author=(entry.author or None),
-                raw_text_if_permitted=entry.description if source.raw_text_permitted else None,
-                content_hash=digest,
-                # Level 3 bucket key for near-duplicate candidate selection.
-                simhash=simhash(f"{entry.title} {entry.description}"),
-                status=SourceReportStatus.NEW,
-            )
+        report = SourceReport(
+            source_id=source.id,
+            source_url=entry.link,
+            canonical_url=entry.canonical_url,
+            canonical_url_hash=url_hash,
+            title=entry.title,
+            description=entry.description or None,
+            published_at=entry.published_at,
+            retrieved_at=datetime.now(UTC),
+            language=(entry.language or source.language or "en")[:16],
+            author=(entry.author or None),
+            raw_text_if_permitted=entry.description if source.raw_text_permitted else None,
+            content_hash=digest,
+            # Level 3 bucket key for near-duplicate candidate selection.
+            simhash=simhash(f"{entry.title} {entry.description}"),
+            status=SourceReportStatus.NEW,
         )
+        session.add(report)
+        await session.flush()
         stats.stored += 1
+        stats.stored_ids.append(report.id)
 
     await session.flush()
     return stats

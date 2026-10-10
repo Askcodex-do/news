@@ -7,6 +7,7 @@ import secrets
 from fastapi import Header, HTTPException, Request, status
 
 from app.core.config import settings
+from app.core.security_log import log_admin_auth_failure
 from app.services.geoip import GeoIPProvider, NullGeoIPProvider
 
 _geoip_provider: GeoIPProvider = NullGeoIPProvider()
@@ -35,14 +36,16 @@ def get_client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
-async def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
+async def require_admin(request: Request, x_admin_token: str | None = Header(default=None)) -> None:
     """Guard admin/ops endpoints with a shared token (constant-time compare)."""
     expected = settings.admin_api_token
     if not expected or expected == "change-me":
         if settings.is_production:
+            log_admin_auth_failure(path=request.url.path, reason="token not configured")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="admin API token is not configured",
             )
     if not x_admin_token or not secrets.compare_digest(x_admin_token, expected):
+        log_admin_auth_failure(path=request.url.path, reason="invalid or missing token")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")

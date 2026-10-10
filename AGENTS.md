@@ -12,7 +12,12 @@ Non-negotiable product rule: **accuracy outranks speed, volume, SEO and
 engagement.** "Not enough verified information to publish" is a valid outcome
 and must be implemented as a product behavior, not just an AI prompt.
 
-The spec is delivered in phases. Phases 1 (foundation) and 2 (news ingestion)
+The spec is delivered in phases. Phases 1 (foundation), 2 (news ingestion),
+3 (event intelligence: clustering, verification, confidence), 4 (AI editorial
+system), 5 (localization: IP→country→local source, ranking, 20+20 feeds),
+6 (images: transient generation, no permanent storage), 7 (continuous 24/7
+operation: queue, lease, monitoring, maintenance) and 8 (production hardening:
+security, rate limiting, SSRF guard, cost controls, backups/DR, load testing)
 are complete; see `README.md` for the phase table.
 
 ## Commands
@@ -20,17 +25,25 @@ are complete; see `README.md` for the phase table.
 ```bash
 # Backend
 cd backend && . .venv/bin/activate
-pytest                       # 62 tests; DB tests use isolated news_test
+pytest                       # 222 tests; DB tests use isolated news_test
 ruff check app tests
 ruff format app tests
 alembic upgrade head         # run from backend/
 python -m app.cli seed       # config/*.yaml -> database (idempotent)
 python -m app.cli export-seeds
 
+# CI (.github/workflows/ci.yml) runs on every PR: backend job spins up
+# pgvector/pg16 + redis, provisions news_test with the least-privilege role and
+# the vector/pg_trgm extensions, migrates, then runs ruff + pytest; a second job
+# runs `npm ci && npm run build` for the frontend.
+
 # Ingestion (Phase 2)
 python -m app.cli worker             # continuous 24/7 loop
 python -m app.cli ingest-once        # one scheduling + execution pass
 python -m app.cli poll-source bbc-world
+
+# Event intelligence (Phase 3)
+python -m app.cli cluster-backfill   # cluster reports that predate Phase 3
 
 # Full stack
 docker compose up -d --build
@@ -83,6 +96,51 @@ docker compose logs -f backend worker
 - Admin API: `/admin/*` (token-protected) — source health, queue depth, stats,
   manual poll, scheduler run.
 
+## Event intelligence (Phase 3)
+
+- Pipeline: report → `app/services/clustering.py` → event → `app/services/verification.py`
+  → facts/conflicts/confidence. The scheduler enqueues `cluster_event` after
+  storing a report; clustering enqueues `verify_event`.
+- Clustering signals: `app/services/embeddings.py` (headline embedding),
+  `app/services/facts.py` (entities, numbers, event type). `similarity()` combines
+  semantic + entity + number overlap. A type mismatch is a **penalty**
+  (`CLUSTER_TYPE_MISMATCH_PENALTY`), not a veto — keyword type labels are
+  imperfect, so identical headlines must still merge across labels.
+- Embeddings are computed from the **headline only**. Bodies are frequently
+  syndicated near-verbatim and would make unrelated stories look alike.
+- Candidates are time-bounded (`EVENT_TIME_WINDOW_HOURS`) and ordered by vector
+  distance, capped at `MAX_CANDIDATES`. Distance ordering (not recency) is what
+  keeps the cap safe during a burst — a recency cap silently splits one event
+  into many. Migration `5b8c1f2a9d47` adds the HNSW index this relies on.
+- Verification: `app/services/independence.py` collapses near-duplicate reports
+  into one independent chain (spec §11) before confidence is scored
+  (`app/services/confidence.py`). Supersession is recency-based (spec §23).
+- Admin API: `GET /admin/events`, `GET /admin/intelligence/stats`,
+  `POST /admin/events/{id}/verify`.
+- `python -m app.cli cluster-backfill` clusters reports that were ingested before
+  Phase 3 existed, so an upgrade does not wait for the next poll cycle.
+
+## Continuous operation (Phase 7)
+
+- The worker loop (`app/services/worker_loop.py`) runs every stage: recover
+  stale locks → execute jobs → (leased) schedule due sources → housekeeping.
+  `run_ingestion_loop` returns immediately when `stop` is set, so shutdown
+  never opens a session.
+- Scheduling is **single-flight**: `scheduler_state` (migration `8d2b6f0a1c34`)
+  is a one-row lease. `queue.acquire_scheduler_lease` is one atomic
+  `INSERT ... ON CONFLICT DO UPDATE ... WHERE locked_at IS NULL OR < cutoff`,
+  so exactly one worker wins per tick. Losing the race is normal, not an error.
+  Scale replicas with `docker compose up --scale worker=N`.
+- Observability lives in `app/services/observability.py`: `ops_snapshot`
+  (`GET /admin/metrics`) and `accuracy_snapshot` (`GET /admin/accuracy`, spec
+  §33). Both are read-only COUNT/GROUP BY aggregations.
+- Housekeeping (`app/services/maintenance.py`, `python -m app.cli maintenance`):
+  archives active events quiet for `STALE_EVENT_HOURS`; prunes SUCCEEDED jobs
+  past `JOB_RETENTION_DAYS`. DEAD jobs are deliberately kept for diagnosis.
+- New settings: `WORKER_TICK_SECONDS`, `SCHEDULER_INTERVAL_SECONDS`,
+  `SCHEDULER_LEASE_SECONDS`, `STALE_EVENT_HOURS`, `JOB_RETENTION_DAYS`,
+  `MAINTENANCE_INTERVAL_SECONDS`.
+
 ## Testing conventions
 
 - Real code paths only; avoid mocks. Integration and ingestion tests hit a real
@@ -96,6 +154,14 @@ docker compose logs -f backend worker
   `asyncio_default_test_loop_scope` to `session`. Keep them in sync: the shared
   engine is created at import time, so mixing module-scoped async fixtures with
   function-scoped loops causes "attached to a different loop" errors.
+- Shared DB factories (`make_source`, `make_report`) and cleaners (`clean_events`,
+  `clean_articles`) live in `tests/conftest.py`. `clean_events` deletes articles
+  first: `articles.event_id → events.id` is a FK, so deleting events first trips
+  it. `make_source` deletes `source_health` before `sources` for the same reason.
+- API tests read the admin token from `settings.admin_api_token`, not a literal:
+  the test environment exports `ADMIN_API_TOKEN`, and `.env` may differ.
+- Tests must not depend on ambient env. If a unit test asserts a provider
+  default, pin the setting with `monkeypatch.setattr(settings, ...)`.
 
 ## Security
 

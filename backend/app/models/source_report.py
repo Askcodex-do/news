@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     DateTime,
     Enum,
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDMixin
 from app.models.enums import SourceReportStatus
+from app.models.event import EMBEDDING_DIM
 
 
 class SourceReport(Base, UUIDMixin, TimestampMixin):
@@ -51,6 +53,12 @@ class SourceReport(Base, UUIDMixin, TimestampMixin):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     # Cheap near-duplicate bucket key (Level 3): SimHash / MinHash band.
     simhash: Mapped[str | None] = mapped_column(String(64), index=True)
+
+    # Phase 3 event intelligence: classified type and sentence embedding used by
+    # the clustering worker to decide which event this report describes.
+    event_type: Mapped[str | None] = mapped_column(String(64), index=True)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     status: Mapped[SourceReportStatus] = mapped_column(
         Enum(SourceReportStatus, name="source_report_status"),

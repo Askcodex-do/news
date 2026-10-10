@@ -18,11 +18,12 @@ from __future__ import annotations
 import json
 import socket
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +35,9 @@ logger = get_logger(__name__)
 
 # A job locked longer than this is assumed to belong to a dead worker.
 STALE_LOCK_AFTER = timedelta(minutes=15)
+# The singleton key and default lease for the single-flight scheduler.
+SCHEDULER_LEASE_KEY = "scheduler"
+SCHEDULER_LEASE = timedelta(minutes=5)
 # Exponential backoff base; attempt N waits BASE * 2**(N-1) seconds.
 RETRY_BACKOFF_BASE_SECONDS = 30
 MAX_RETRY_BACKOFF_SECONDS = 3600
@@ -116,22 +120,39 @@ async def enqueue(
 async def claim_next(
     session: AsyncSession,
     *,
-    job_type: JobType,
+    job_type: JobType | None = None,
+    job_types: Sequence[JobType] | None = None,
     locked_by: str,
 ) -> ProcessingJob | None:
-    """Atomically claim the oldest runnable job of ``job_type``, or None.
+    """Atomically claim the oldest runnable job, or None.
 
-    ``FOR UPDATE SKIP LOCKED`` lets N workers poll concurrently without
-    blocking or double-processing.
+    Pass ``job_type`` for a single type, or ``job_types`` for several ordered by
+    preference. ``FOR UPDATE SKIP LOCKED`` lets N workers poll concurrently
+    without blocking or double-processing.
     """
-    stmt = (
-        select(ProcessingJob)
-        .where(
-            ProcessingJob.job_type == job_type.value,
-            ProcessingJob.status == JobStatus.PENDING,
-            (ProcessingJob.run_after.is_(None)) | (ProcessingJob.run_after <= _now()),
+    if job_type is not None:
+        types = [job_type]
+    elif job_types:
+        types = list(job_types)
+    else:
+        raise ValueError("claim_next requires job_type or job_types")
+
+    stmt = select(ProcessingJob).where(
+        ProcessingJob.job_type.in_([t.value for t in types]),
+        ProcessingJob.status == JobStatus.PENDING,
+        (ProcessingJob.run_after.is_(None)) | (ProcessingJob.run_after <= _now()),
+    )
+    if len(types) > 1:
+        # Prefer earlier types so latency-sensitive stages (clustering,
+        # verification) are not starved by a steady stream of poll jobs.
+        priority = case(
+            {t.value: index for index, t in enumerate(types)},
+            value=ProcessingJob.job_type,
+            else_=len(types),
         )
-        .order_by(ProcessingJob.run_after.asc().nulls_first(), ProcessingJob.created_at.asc())
+        stmt = stmt.order_by(priority)
+    stmt = (
+        stmt.order_by(ProcessingJob.run_after.asc().nulls_first(), ProcessingJob.created_at.asc())
         .limit(1)
         .with_for_update(skip_locked=True)
     )
@@ -198,6 +219,81 @@ async def recover_stale(session: AsyncSession) -> int:
     if count:
         logger.warning("recovered %d stale job(s)", count)
     return count
+
+
+async def acquire_scheduler_lease(
+    session: AsyncSession, *, worker: str, lease: timedelta = SCHEDULER_LEASE
+) -> bool:
+    """Try to become the single scheduling worker for this tick (spec section 25).
+
+    The insert-or-steal is one atomic statement: it inserts the singleton row on
+    first use, and otherwise takes it only when the current lease is free or
+    expired. Concurrent workers contend on the primary key, so at most one wins.
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from app.models.scheduler_state import SchedulerState
+
+    now = _now()
+    cutoff = now - lease
+    stmt = pg_insert(SchedulerState).values(
+        name=SCHEDULER_LEASE_KEY, locked_by=worker, locked_at=now
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[SchedulerState.name],
+        set_={"locked_by": worker, "locked_at": now},
+        where=(SchedulerState.locked_at.is_(None)) | (SchedulerState.locked_at < cutoff),
+    ).returning(SchedulerState.name)
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+
+async def release_scheduler_lease(
+    session: AsyncSession, *, worker: str, result: str | None = None
+) -> None:
+    """Release the lease and record when scheduling last ran."""
+    from app.models.scheduler_state import SchedulerState
+
+    row = await session.get(SchedulerState, SCHEDULER_LEASE_KEY)
+    if row is None or row.locked_by != worker:
+        return
+    row.locked_by = None
+    row.locked_at = None
+    row.last_run_at = _now()
+    row.last_result = result
+    await session.flush()
+
+
+async def scheduler_status(session: AsyncSession) -> dict | None:
+    """Observability: who last scheduled and when (spec section 33)."""
+    from app.models.scheduler_state import SchedulerState
+
+    row = await session.get(SchedulerState, SCHEDULER_LEASE_KEY)
+    if row is None:
+        return None
+    return {
+        "locked_by": row.locked_by,
+        "locked_at": row.locked_at,
+        "last_run_at": row.last_run_at,
+        "last_result": row.last_result,
+    }
+
+
+async def purge_finished_jobs(session: AsyncSession, *, older_than: timedelta) -> int:
+    """Delete SUCCEEDED jobs older than ``older_than``. Returns the count.
+
+    A 24/7 queue accumulates one row per poll forever; dead-lettered jobs are
+    kept for diagnosis but finished ones are not useful history.
+    """
+    from sqlalchemy import delete
+
+    cutoff = _now() - older_than
+    result = await session.execute(
+        delete(ProcessingJob).where(
+            ProcessingJob.status == JobStatus.SUCCEEDED,
+            ProcessingJob.updated_at < cutoff,
+        )
+    )
+    return int(result.rowcount or 0)
 
 
 async def queue_depth(session: AsyncSession, job_type: JobType | None = None) -> dict[str, int]:

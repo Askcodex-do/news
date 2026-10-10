@@ -9,10 +9,12 @@ from app.models.event import (
     Event,
     EventConflict,
     EventFact,
+    EventFactSource,
     EventReport,
     EventUpdate,
 )
 from app.models.job import ProcessingJob
+from app.models.scheduler_state import SchedulerState
 from app.models.source import (
     CountrySource,
     Source,
@@ -32,9 +34,11 @@ __all__ = [
     "Event",
     "EventConflict",
     "EventFact",
+    "EventFactSource",
     "EventReport",
     "EventUpdate",
     "ProcessingJob",
+    "SchedulerState",
     "Source",
     "SourceHealth",
     "SourceReliability",

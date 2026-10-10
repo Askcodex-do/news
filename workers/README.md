@@ -5,27 +5,33 @@ worker; later phases add the rest. The worker *logic* lives in
 `backend/app/services` so it ships in the backend image and is importable by
 tests; this directory documents the layout and conventions.
 
-Implemented (Phase 2):
+Implemented:
 
 ```
 backend/app/services/worker_loop.py     continuous scheduling + execution loop
 backend/app/services/scheduler.py       due-source detection, job enqueueing, backoff
-backend/app/services/queue.py           PostgreSQL job queue (idempotent, retryable)
+backend/app/services/queue.py           PostgreSQL job queue (idempotent, retryable) + scheduler lease
 backend/app/services/ingestion.py       fetch → parse → normalize → validate → dedup → store
+backend/app/services/clustering.py      near-duplicate + event clustering
+backend/app/services/verification.py    fact extraction, multi-source verification, confidence
+backend/app/services/ranking.py         importance scoring, global/local ranking
+backend/app/services/article_generation.py  AI editorial synthesis + fact validation
+backend/app/services/images.py          transient image generation (no permanent storage)
+backend/app/services/maintenance.py     stale-event archiving, job retention (Phase 7)
+backend/app/services/observability.py   ops + accuracy snapshots (Phase 7)
 backend/app/services/source_health.py   per-source health + rolling latency
 ```
 
-Planned layout:
+The single worker process runs every stage; the job types below are dispatched
+by `scheduler.process_pending_jobs`:
 
 ```
-workers/
-├── clustering_worker/     near-duplicate + event clustering
-├── verification_worker/   fact extraction, multi-source verification, confidence
-├── ranking_worker/        importance scoring, global/local ranking
-├── article_worker/        AI editorial synthesis + fact validation
-├── image_worker/          transient image generation (no permanent storage)
-└── update_worker/         developing-story updates + stale-claim protection
+poll_source → cluster_event → verify_event → generate_article → generate_image
 ```
+
+Scaling: `--scale worker=N`. The scheduler lease (`scheduler_state`) means one
+replica schedules poll jobs while all of them execute, so adding replicas adds
+execution throughput without N-way scheduling churn.
 
 Design rules that apply to every worker:
 

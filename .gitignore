@@ -30,3 +30,7 @@ npm-debug.log*
 # Data
 *.sqlite
 *.db
+
+# Database backups / disaster-recovery artifacts (never commit dumps)
+backups/
+*.dump

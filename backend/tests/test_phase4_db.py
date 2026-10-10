@@ -346,3 +346,27 @@ async def test_generation_skips_without_ai_provider(
     outcome = await generate_article_for_event(db_session, event.id)
     assert not outcome.published
     assert "no AI provider configured" in outcome.reason
+
+
+async def test_article_detail_endpoint_decodes_json_list_columns(
+    db_session, clean_articles, clean_events, make_source, make_report, client
+):
+    """The detail endpoint must render a generated article, not 500.
+
+    ``key_points`` and ``timeline`` are stored as JSON text but the response
+    schema exposes lists; validating the raw string used to raise and 500 the
+    endpoint that renders a published article and its source attribution.
+    """
+    event = await _build_verified_event(db_session, make_source, make_report)
+    outcome = await generate_article_for_event(db_session, event.id)
+    assert outcome.published, outcome.reason
+    article = await db_session.get(Article, outcome.article_id)
+    await db_session.commit()
+
+    resp = await client.get(f"/articles/{article.slug}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["headline"] == article.headline
+    assert isinstance(body["key_points"], list)
+    assert isinstance(body["timeline"], list)
+    assert len(body["sources"]) >= 2

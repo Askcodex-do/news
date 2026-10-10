@@ -1,0 +1,6 @@
+# Fallback start command for platforms that read a Procfile (e.g. if you deploy
+# the backend as a native Python service instead of the Docker image). The
+# blueprint deploys the Docker image and sets an explicit start command, so this
+# file is only used if you switch that service to runtime: python.
+web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+worker: python -m app.cli worker

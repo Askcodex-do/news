@@ -1,0 +1,117 @@
+# Render Blueprint — one-click deployment of the accuracy-first news platform.
+#
+# Apply it from the Render dashboard:  New + > Blueprint > pick this repo.
+# Render reads this file from the default branch and provisions everything
+# below. Renaming a service changes the private-network hostname that the
+# frontend uses to reach the API, so keep the names in sync if you rename.
+#
+# What is created:
+#   news-ai-db          managed Postgres (pgvector is enabled on boot by the
+#                       api's pre-deploy command; migration 0001 verifies it)
+#   news-ai-api         public web service, runs the FastAPI API
+#   news-ai-worker      24/7 background worker, runs the ingestion loop
+#   news-ai-frontend    public web service, runs the Next.js UI
+#
+# Redis is intentionally omitted: the job queue is PostgreSQL-backed and the
+# rate limiter/cost controls fall back to an in-process store, so the stack runs
+# without a Key Value instance (spec sections 25-27). Add one later only if you
+# need shared rate-limit counters across replicas.
+#
+# Two values must be supplied once in the dashboard (marked sync: false):
+#   ADMIN_API_TOKEN  a strong random string protecting /admin endpoints
+#   AI_API_KEY       optional; only needed when AI_PROVIDER is openai
+
+services:
+  - type: web
+    name: news-ai-api
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./infrastructure/docker/backend.Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    # Apply migrations, enable pgvector, and seed the 30 international sources +
+    # country mappings on every deploy (both steps are idempotent).
+    preDeployCommand: sh -c "alembic upgrade head && python -m app.cli seed"
+    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - fromGroup: news-ai-shared
+
+  # The continuous ingestion loop (fetch -> dedup -> cluster -> verify ->
+  # generate -> publish). It retries transient failures instead of exiting, so
+  # a slightly early start during a deploy is harmless.
+  - type: worker
+    name: news-ai-worker
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./infrastructure/docker/backend.Dockerfile
+    dockerContext: .
+    dockerCommand: python -m app.cli worker
+    envVars:
+      - fromGroup: news-ai-shared
+
+  - type: web
+    name: news-ai-frontend
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./infrastructure/docker/frontend.Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    dockerCommand: sh -c "npm run start -- -H 0.0.0.0 -p $PORT"
+    envVars:
+      # Server-side only: the browser never learns the API address.
+      - key: BACKEND_INTERNAL_URL
+        fromService:
+          type: web
+          name: news-ai-api
+          property: hostport
+      # CORS on the backend allows exactly this origin (spec section 34). It is
+      # read at build time by Next.js, so the URL is inlined into the bundle.
+      - key: NEXT_PUBLIC_API_BASE_URL
+        fromService:
+          type: web
+          name: news-ai-api
+          envVarKey: RENDER_EXTERNAL_URL
+
+envVarGroups:
+  - name: news-ai-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: news-ai-db
+          property: connectionString
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      # Render sits in front of the service and sets X-Forwarded-For; the
+      # backend must trust it to resolve a visitor's country (spec section 5).
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+      # Origin allowed by the API's CORS middleware (spec section 34).
+      - key: NEXT_PUBLIC_API_BASE_URL
+        fromService:
+          type: web
+          name: news-ai-frontend
+          envVarKey: RENDER_EXTERNAL_URL
+      # The "offline" writer is deterministic and needs no key, so a fresh
+      # deploy can run the whole pipeline end to end. Set AI_PROVIDER=openai
+      # (and provide AI_API_KEY) for genuine editorial synthesis.
+      - key: AI_PROVIDER
+        value: offline
+      - key: IMAGE_ENABLED
+        value: "true"
+      - key: ADMIN_API_TOKEN
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+
+databases:
+  - name: news-ai-db
+    plan: basic-256mb
+    region: oregon
+    postgresMajorVersion: "16"
+    # Reachable only from this workspace's services, never the public internet.
+    ipAllowList: []

@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Repository root: backend/app/core/config.py -> ../../../..
@@ -29,6 +29,21 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://news_app:change-me@localhost:5432/news"
+
+    @field_validator("database_url")
+    @classmethod
+    def _require_async_driver(cls, value: str) -> str:
+        """Force the asyncpg driver onto a plain Postgres URL.
+
+        Managed providers (Render, Heroku) hand out ``postgresql://`` or
+        ``postgres://``; SQLAlchemy would then pick a sync dialect that the
+        async engine cannot use. Normalize here so ``DATABASE_URL`` can be set
+        verbatim from the provider. ``sync_database_url`` later swaps in psycopg.
+        """
+        for scheme in ("postgresql://", "postgres://"):
+            if value.startswith(scheme):
+                return "postgresql+asyncpg://" + value[len(scheme) :]
+        return value
 
     # Queue
     redis_url: str = "redis://localhost:6379/0"

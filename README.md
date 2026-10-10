@@ -174,6 +174,13 @@ Then:
 The `migrate` service applies migrations and seeds the database from
 `config/*.yaml` before the API and worker start.
 
+## Deploying to Render
+
+A Render Blueprint (`render.yaml`) provisions the API, the 24/7 worker, the
+frontend and a managed Postgres from this repository. Applying it needs a Render
+account; see `docs/deployment-render.md` for the one-time dashboard steps and
+the post-deploy verification commands.
+
 ## Local development (no Docker for the app)
 
 ```bash

@@ -141,6 +141,28 @@ docker compose logs -f backend worker
   `SCHEDULER_LEASE_SECONDS`, `STALE_EVENT_HOURS`, `JOB_RETENTION_DAYS`,
   `MAINTENANCE_INTERVAL_SECONDS`.
 
+## Deployment (Render / managed platforms)
+
+- `render.yaml` (repo root) is a Blueprint: API web service, 24/7 worker,
+  frontend, and managed Postgres. Applying it needs a Render account (New+ >
+  Blueprint > set the two `sync: false` secrets). See `docs/deployment-render.md`.
+- Redis is optional. The queue is PostgreSQL-backed (`processing_jobs`) and the
+  rate limiter / AI cost counter fall back in-process when
+  `RATE_LIMIT_REDIS_ENABLED` is false, so no Key Value instance is required.
+- Managed providers hand out `postgresql://` connection strings. `Settings`
+  normalizes `postgresql://` and `postgres://` to `postgresql+asyncpg://` so
+  `DATABASE_URL` can be set verbatim; `sync_database_url` swaps in psycopg.
+- The blueprint's API `preDeployCommand` runs `alembic upgrade head` then
+  `python -m app.cli seed` (idempotent). The app role can't `CREATE EXTENSION`,
+  so enable `vector`/`pg_trgm` as a one-time superuser step during provisioning;
+  migration `0001` verifies only.
+- Render sits behind a proxy, so `TRUST_PROXY_HEADERS=true` is required for
+  country resolution. The backend's CORS allow-list is
+  `NEXT_PUBLIC_API_BASE_URL`, which must equal the public frontend URL.
+- Docker images hard-code ports 8000/3000; managed platforms inject `$PORT`, so
+  the start commands must bind `$PORT` (`uvicorn ... --port $PORT`,
+  `npm run start -- -p $PORT`).
+
 ## Testing conventions
 
 - Real code paths only; avoid mocks. Integration and ingestion tests hit a real
